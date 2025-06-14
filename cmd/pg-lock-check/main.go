@@ -6,14 +6,14 @@ import (
 	"os"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/nnaka2992/pg-lock-check/internal/analyzer"
 	"github.com/nnaka2992/pg-lock-check/internal/parser"
+	"github.com/spf13/cobra"
 )
 
 var (
 	version = "0.1.0"
-	
+
 	// Flags
 	fileFlag          string
 	outputFormat      string
@@ -29,7 +29,7 @@ func main() {
 
 func run(args []string) int {
 	var exitCode int
-	
+
 	rootCmd := &cobra.Command{
 		Use:     "pg-lock-check [SQL]",
 		Short:   "PostgreSQL lock analyzer",
@@ -49,7 +49,7 @@ func run(args []string) int {
 		},
 		SilenceUsage: true,
 	}
-	
+
 	// Add flags
 	rootCmd.Flags().StringVarP(&fileFlag, "file", "f", "", "read SQL from file")
 	rootCmd.Flags().StringVarP(&outputFormat, "output", "o", "text", "output format: text, json, yaml")
@@ -57,19 +57,18 @@ func run(args []string) int {
 	rootCmd.Flags().BoolVar(&noColorFlag, "no-color", false, "disable colored output")
 	rootCmd.Flags().BoolVarP(&quietFlag, "quiet", "q", false, "quiet mode")
 	rootCmd.Flags().BoolVar(&verboseFlag, "verbose", false, "verbose output")
-	
+
 	rootCmd.SetArgs(args)
-	
+
 	if err := rootCmd.Execute(); err != nil {
 		return exitCode
 	}
-	
+
 	return 0
 }
 
 func isParseError(err error) bool {
-	return err != nil && (
-		contains(err.Error(), "parse error") ||
+	return err != nil && (contains(err.Error(), "parse error") ||
 		contains(err.Error(), "syntax error"))
 }
 
@@ -79,7 +78,7 @@ func contains(s, substr string) bool {
 
 func runAnalysis(cmd *cobra.Command, args []string) error {
 	var sql string
-	
+
 	// Get SQL input
 	if fileFlag != "" {
 		content, err := os.ReadFile(fileFlag)
@@ -101,30 +100,30 @@ func runAnalysis(cmd *cobra.Command, args []string) error {
 			sql = string(content)
 		} else {
 			// No input provided
-			cmd.Usage()
+			_ = cmd.Usage()
 			return fmt.Errorf("no SQL provided")
 		}
 	}
-	
+
 	// Parse
 	p := parser.NewParser()
 	parsed, err := p.ParseSQL(sql)
 	if err != nil {
 		return fmt.Errorf("parse error: %w", err)
 	}
-	
+
 	// Analyze
 	a := analyzer.New()
 	mode := analyzer.InTransaction
 	if noTransactionFlag {
 		mode = analyzer.NoTransaction
 	}
-	
+
 	results, err := a.Analyze(parsed, mode)
 	if err != nil {
 		return fmt.Errorf("analysis error: %w", err)
 	}
-	
+
 	// Output
 	switch outputFormat {
 	case "json":
@@ -136,15 +135,15 @@ func runAnalysis(cmd *cobra.Command, args []string) error {
 			if i < len(parsed.Statements) {
 				stmt = parsed.Statements[i].SQL
 			}
-			
+
 			severity := getSeverityName(result.Severity)
 			fmt.Printf("[%s] %s\n", severity, stmt)
 		}
-		
+
 		// Summary
 		fmt.Printf("\nSummary: %d statements analyzed\n", len(results))
 	}
-	
+
 	return nil
 }
 

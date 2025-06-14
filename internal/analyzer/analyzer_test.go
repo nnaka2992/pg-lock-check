@@ -811,7 +811,7 @@ func TestAnalyzer_DDL_Indexes(t *testing.T) {
 			mode:             InTransaction,
 			expectedSeverity: SeverityCritical,
 			expectedOp:       "REINDEX SCHEMA",
-			expectedLocks:    map[string]string{},  // Schema-wide locks on all tables
+			expectedLocks:    map[string]string{}, // Schema-wide locks on all tables
 		},
 		{
 			name:             "REINDEX DATABASE",
@@ -819,7 +819,7 @@ func TestAnalyzer_DDL_Indexes(t *testing.T) {
 			mode:             InTransaction,
 			expectedSeverity: SeverityCritical,
 			expectedOp:       "REINDEX DATABASE",
-			expectedLocks:    map[string]string{},  // Database-wide locks
+			expectedLocks:    map[string]string{}, // Database-wide locks
 		},
 		{
 			name:             "REINDEX SYSTEM",
@@ -827,7 +827,7 @@ func TestAnalyzer_DDL_Indexes(t *testing.T) {
 			mode:             InTransaction,
 			expectedSeverity: SeverityCritical,
 			expectedOp:       "REINDEX SYSTEM",
-			expectedLocks:    map[string]string{},  // System catalog locks
+			expectedLocks:    map[string]string{}, // System catalog locks
 		},
 		{
 			name:             "REINDEX CONCURRENTLY - transaction",
@@ -2598,7 +2598,6 @@ func runAnalyzerTests(t *testing.T, tests []struct {
 		})
 	}
 }
-
 
 // ===== UNKNOWN OPERATIONS TEST =====
 

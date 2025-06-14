@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: 'go.mod'
+        check-latest: true
+    
+    - name: Check formatting
+      run: |
+        if [ -n "$(gofmt -s -l .)" ]; then
+          echo "Go files must be formatted with gofmt -s"
+          gofmt -s -d .
+          exit 1
+        fi
+    
+    - name: Check go mod tidy
+      run: |
+        go mod tidy
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "go mod tidy produced changes:"
+          git diff
+          exit 1
+        fi
+    
+    - name: Run go vet
+      run: go vet ./...
+    
+    - name: Run golangci-lint
+      uses: golangci/golangci-lint-action@v7
+      with:
+        version: v2.1.6
+        args: --timeout=5m
+
+  test:
+    name: Test
+    needs: lint
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: 'go.mod'
+        check-latest: true
+    
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/go/pkg/mod
+          ~/.cache/go-build
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+    
+    - name: Download dependencies
+      run: go mod download
+    
+    - name: Run tests with race detector
+      run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+    
+    - name: Upload coverage
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./coverage.txt
+        fail_ci_if_error: false
+
+  build:
+    name: Build
+    needs: test
+    # Only run build on main branch pushes, not on PRs
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            binary-name: pg-lock-check
+          - os: macos-latest
+            binary-name: pg-lock-check
+          - os: windows-latest
+            binary-name: pg-lock-check.exe
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: 'go.mod'
+        check-latest: true
+    
+    - name: Build binary
+      run: go build -v -o ${{ matrix.binary-name }} ./cmd/pg-lock-check
+    
+    - name: Test binary (Unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        ./${{ matrix.binary-name }} --version
+        echo "SELECT 1" | ./${{ matrix.binary-name }}
+    
+    - name: Test binary (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: cmd
+      run: |
+        .\${{ matrix.binary-name }} --version
+        echo SELECT 1 | .\${{ matrix.binary-name }}

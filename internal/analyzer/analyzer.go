@@ -3,7 +3,7 @@ package analyzer
 import (
 	"fmt"
 	"strings"
-	
+
 	"github.com/nnaka2992/pg-lock-check/internal/parser"
 	"github.com/pganalyze/pg_query_go/v6"
 )
@@ -12,14 +12,14 @@ import (
 type Analyzer interface {
 	// AnalyzeStatement analyzes a single parsed statement
 	AnalyzeStatement(stmt parser.ParsedStatement, mode TransactionMode) (*Result, error)
-	
+
 	// Analyze analyzes all statements in a parsed result
 	Analyze(parsed *parser.ParseResult, mode TransactionMode) ([]*Result, error)
 }
 
 // analyzer is the main implementation of the Analyzer interface
 type analyzer struct {
-	registry *operationRegistry
+	registry         *operationRegistry
 	transactionDepth int // Track nesting level of transactions
 }
 
@@ -42,36 +42,36 @@ func (a *analyzer) AnalyzeStatement(stmt parser.ParsedStatement, mode Transactio
 
 	// Get the first statement node from the AST
 	stmtNode := stmt.AST.Stmts[0].Stmt
-	
+
 	// Analyze the AST node to determine operation type and details
 	opInfo := a.analyzeNode(stmtNode, mode)
 	if opInfo == nil {
 		return nil, fmt.Errorf("unsupported SQL operation")
 	}
-	
+
 	// Special handling for MERGE to detect WHERE conditions
 	if opInfo.operation == "MERGE without WHERE" {
 		upperSQL := strings.ToUpper(stmt.SQL)
 		// MERGE is considered "with WHERE" if:
 		// 1. It has additional conditions in WHEN clause (AND after MATCHED)
 		// 2. It uses a subquery/CTE in USING clause (targeted merge)
-		if strings.Contains(upperSQL, "WHEN MATCHED AND") || 
-		   strings.Contains(upperSQL, "USING (SELECT") {
+		if strings.Contains(upperSQL, "WHEN MATCHED AND") ||
+			strings.Contains(upperSQL, "USING (SELECT") {
 			opInfo.operation = "MERGE with WHERE"
 		}
 	}
-	
+
 	// Special handling for DETACH PARTITION CONCURRENTLY
 	if opInfo.operation == "ALTER TABLE DETACH PARTITION" && strings.Contains(strings.ToUpper(stmt.SQL), "CONCURRENTLY") {
 		opInfo.operation = "ALTER TABLE DETACH PARTITION CONCURRENTLY"
 	}
-	
+
 	// Get severity and lock information from the registry
 	severity, lockType := a.registry.getSeverityAndLock(opInfo.operation, mode)
-	
+
 	// Extract table information with context-aware locks
 	tableLocksMap := extractTablesWithContext(stmtNode)
-	
+
 	// If no tables were found with context, fall back to simple extraction
 	if len(tableLocksMap) == 0 {
 		tables := extractTables(stmtNode)
@@ -80,7 +80,7 @@ func (a *analyzer) AnalyzeStatement(stmt parser.ParsedStatement, mode Transactio
 			tableLocksMap[table] = lockType
 		}
 	}
-	
+
 	if opInfo.additionalTableLocks != nil {
 		for table, lock := range opInfo.additionalTableLocks {
 			if _, exists := tableLocksMap[table]; !exists {
@@ -88,7 +88,7 @@ func (a *analyzer) AnalyzeStatement(stmt parser.ParsedStatement, mode Transactio
 			}
 		}
 	}
-	
+
 	// For SELECT statements with locking, override the lock type
 	if _, ok := stmtNode.Node.(*pg_query.Node_SelectStmt); ok {
 		// If it's a SELECT with locking clause, use the operation's lock type
@@ -98,13 +98,13 @@ func (a *analyzer) AnalyzeStatement(stmt parser.ParsedStatement, mode Transactio
 			}
 		}
 	}
-	
+
 	// Format table locks
 	tableLocks := make([]string, 0, len(tableLocksMap))
 	for table, lockType := range tableLocksMap {
 		tableLocks = append(tableLocks, formatTableLock(table, lockType))
 	}
-	
+
 	return &Result{
 		Severity:   severity,
 		operation:  opInfo.operation,
@@ -117,33 +117,33 @@ func (a *analyzer) AnalyzeStatement(stmt parser.ParsedStatement, mode Transactio
 // Analyze analyzes all statements in a parsed result
 func (a *analyzer) Analyze(parsed *parser.ParseResult, mode TransactionMode) ([]*Result, error) {
 	results := make([]*Result, 0, len(parsed.Statements))
-	
+
 	// Reset transaction depth for each analysis
 	a.transactionDepth = 0
-	
+
 	// If the default mode is InTransaction, start with depth 1
 	if mode == InTransaction {
 		a.transactionDepth = 1
 	}
-	
+
 	for _, stmt := range parsed.Statements {
 		// Determine the effective mode based on transaction depth
 		effectiveMode := NoTransaction
 		if a.transactionDepth > 0 {
 			effectiveMode = InTransaction
 		}
-		
+
 		result, err := a.AnalyzeStatement(stmt, effectiveMode)
 		if err != nil {
 			return nil, err
 		}
-		
+
 		// Update transaction depth based on the operation
 		a.updateTransactionDepth(result.Operation())
-		
+
 		results = append(results, result)
 	}
-	
+
 	return results, nil
 }
 
@@ -164,7 +164,7 @@ func (a *analyzer) analyzeNode(node *pg_query.Node, mode TransactionMode) *opera
 			tableLock: AccessShare,
 		}
 	}
-	
+
 	// Check all possible statement types in the node
 	switch n := node.Node.(type) {
 	// DML Operations
@@ -178,7 +178,7 @@ func (a *analyzer) analyzeNode(node *pg_query.Node, mode TransactionMode) *opera
 		return a.analyzeSelect(n.SelectStmt)
 	case *pg_query.Node_MergeStmt:
 		return a.analyzeMerge(n.MergeStmt)
-	
+
 	// DDL Operations - Tables
 	case *pg_query.Node_CreateStmt:
 		return a.analyzeCreate(n.CreateStmt)
@@ -192,13 +192,13 @@ func (a *analyzer) analyzeNode(node *pg_query.Node, mode TransactionMode) *opera
 		return a.analyzeDrop(n.DropStmt)
 	case *pg_query.Node_TruncateStmt:
 		return a.analyzeTruncate(n.TruncateStmt)
-	
+
 	// DDL Operations - Indexes
 	case *pg_query.Node_IndexStmt:
 		return a.analyzeIndex(n.IndexStmt)
 	case *pg_query.Node_ReindexStmt:
 		return a.analyzeReindex(n.ReindexStmt)
-	
+
 	// DDL Operations - Views
 	case *pg_query.Node_ViewStmt:
 		return a.analyzeCreateView(n.ViewStmt)
@@ -206,7 +206,7 @@ func (a *analyzer) analyzeNode(node *pg_query.Node, mode TransactionMode) *opera
 		return a.analyzeCreateMatView(n.CreateTableAsStmt)
 	case *pg_query.Node_RefreshMatViewStmt:
 		return a.analyzeRefreshMatView(n.RefreshMatViewStmt)
-	
+
 	// DDL Operations - Other Objects
 	case *pg_query.Node_CreateSchemaStmt:
 		return a.analyzeCreateSchema(n.CreateSchemaStmt)
@@ -222,7 +222,7 @@ func (a *analyzer) analyzeNode(node *pg_query.Node, mode TransactionMode) *opera
 		return a.analyzeAlterExtension(n.AlterExtensionStmt)
 	case *pg_query.Node_AlterEnumStmt:
 		return a.analyzeAlterType(n.AlterEnumStmt)
-	
+
 	// Database/Tablespace Operations
 	case *pg_query.Node_CreatedbStmt:
 		return a.analyzeCreateDatabase(n.CreatedbStmt)
@@ -247,7 +247,7 @@ func (a *analyzer) analyzeNode(node *pg_query.Node, mode TransactionMode) *opera
 		}
 	case *pg_query.Node_AlterTableSpaceOptionsStmt:
 		return a.analyzeAlterTablespace(n.AlterTableSpaceOptionsStmt)
-	
+
 	// Maintenance Operations
 	case *pg_query.Node_VacuumStmt:
 		if !n.VacuumStmt.IsVacuumcmd {
@@ -258,7 +258,7 @@ func (a *analyzer) analyzeNode(node *pg_query.Node, mode TransactionMode) *opera
 		return a.analyzeCluster(n.ClusterStmt)
 	case *pg_query.Node_CopyStmt:
 		return a.analyzeCopy(n.CopyStmt)
-	
+
 	// Access Control
 	case *pg_query.Node_GrantStmt:
 		return a.analyzeGrant(n.GrantStmt)
@@ -277,7 +277,7 @@ func (a *analyzer) analyzeNode(node *pg_query.Node, mode TransactionMode) *opera
 		}
 	case *pg_query.Node_AlterDefaultPrivilegesStmt:
 		return a.analyzeAlterDefaultPrivileges(n.AlterDefaultPrivilegesStmt)
-	
+
 	// Rules/Policies/Triggers
 	case *pg_query.Node_CreateTrigStmt:
 		return a.analyzeCreateTrigger(n.CreateTrigStmt)
@@ -285,15 +285,15 @@ func (a *analyzer) analyzeNode(node *pg_query.Node, mode TransactionMode) *opera
 		return a.analyzeCreateRule(n.RuleStmt)
 	case *pg_query.Node_CreatePolicyStmt:
 		return a.analyzeCreatePolicy(n.CreatePolicyStmt)
-	
+
 	// Locking
 	case *pg_query.Node_LockStmt:
 		return a.analyzeLock(n.LockStmt)
-	
+
 	// Transaction Control
 	case *pg_query.Node_TransactionStmt:
 		return a.analyzeTransaction(n.TransactionStmt)
-	
+
 	// System Operations
 	case *pg_query.Node_VariableSetStmt:
 		return a.analyzeVariableSet(n.VariableSetStmt)
@@ -303,7 +303,7 @@ func (a *analyzer) analyzeNode(node *pg_query.Node, mode TransactionMode) *opera
 		return a.analyzeCheckpoint(n.CheckPointStmt)
 	case *pg_query.Node_LoadStmt:
 		return a.analyzeLoad(n.LoadStmt)
-	
+
 	// Replication
 	case *pg_query.Node_CreateSubscriptionStmt:
 		return a.analyzeCreateSubscription(n.CreateSubscriptionStmt)
@@ -313,11 +313,11 @@ func (a *analyzer) analyzeNode(node *pg_query.Node, mode TransactionMode) *opera
 		return a.analyzeCreatePublication(n.CreatePublicationStmt)
 	case *pg_query.Node_AlterPublicationStmt:
 		return a.analyzeAlterPublication(n.AlterPublicationStmt)
-	
+
 	// Comments
 	case *pg_query.Node_CommentStmt:
 		return a.analyzeComment(n.CommentStmt)
-	
+
 	// Additional DDL Operations
 	case *pg_query.Node_CreateEnumStmt:
 		return &operationInfo{
@@ -388,7 +388,7 @@ func (a *analyzer) analyzeNode(node *pg_query.Node, mode TransactionMode) *opera
 			operation: "ALTER ROLE",
 			tableLock: AccessExclusive,
 		}
-	
+
 	// If we have a RawStmt, recursively analyze its stmt
 	case *pg_query.Node_RawStmt:
 		if n.RawStmt != nil && n.RawStmt.Stmt != nil {
@@ -396,7 +396,7 @@ func (a *analyzer) analyzeNode(node *pg_query.Node, mode TransactionMode) *opera
 		}
 		// Malformed RawStmt without inner statement
 		return nil
-	
+
 	// Default for unknown nodes
 	default:
 		return nil

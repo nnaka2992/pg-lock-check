@@ -42,11 +42,11 @@ func (a *analyzer) analyzeDMLRecursive(node *pg_query.Node, mode TransactionMode
 	if node == nil {
 		return nil
 	}
-	
+
 	var allOperations []*operationInfo
 	var allTables []string
 	tableMap := make(map[string]bool)
-	
+
 	// Extract and analyze CTEs first
 	withClause := extractWithClause(node)
 	if withClause != nil && len(withClause.Ctes) > 0 {
@@ -69,7 +69,7 @@ func (a *analyzer) analyzeDMLRecursive(node *pg_query.Node, mode TransactionMode
 			}
 		}
 	}
-	
+
 	// Analyze the main statement (non-recursively)
 	mainOp := a.analyzeMainStatement(node, mode)
 	if mainOp != nil {
@@ -83,18 +83,18 @@ func (a *analyzer) analyzeDMLRecursive(node *pg_query.Node, mode TransactionMode
 			}
 		}
 	}
-	
+
 	// Find the most severe operation
 	mostSevere := determineMostSevereOperation(allOperations)
 	if mostSevere != nil {
 		// Create a new operation info with all collected tables
 		result := &operationInfo{
-			operation: mostSevere.operation,
-			tableLock: mostSevere.tableLock,
-			message:   mostSevere.message,
+			operation:            mostSevere.operation,
+			tableLock:            mostSevere.tableLock,
+			message:              mostSevere.message,
 			additionalTableLocks: make(map[string]LockType),
 		}
-		
+
 		// For INSERT SELECT, we need to handle table locks differently
 		if mostSevere.operation == "INSERT SELECT" {
 			// The main statement tables get the operation's lock type
@@ -102,7 +102,7 @@ func (a *analyzer) analyzeDMLRecursive(node *pg_query.Node, mode TransactionMode
 			for _, table := range mainTables {
 				result.additionalTableLocks[table] = mostSevere.tableLock
 			}
-			
+
 			// Tables from SELECT get AccessShare
 			if insertStmt, ok := node.Node.(*pg_query.Node_InsertStmt); ok && insertStmt.InsertStmt.SelectStmt != nil {
 				selectTables := extractTablesFromNode(insertStmt.InsertStmt.SelectStmt)
@@ -118,10 +118,10 @@ func (a *analyzer) analyzeDMLRecursive(node *pg_query.Node, mode TransactionMode
 				result.additionalTableLocks[table] = mostSevere.tableLock
 			}
 		}
-		
+
 		return result
 	}
-	
+
 	return nil
 }
 
@@ -130,7 +130,7 @@ func extractWithClause(node *pg_query.Node) *pg_query.WithClause {
 	if node == nil {
 		return nil
 	}
-	
+
 	switch n := node.Node.(type) {
 	case *pg_query.Node_SelectStmt:
 		return n.SelectStmt.WithClause
@@ -151,7 +151,7 @@ func (a *analyzer) analyzeMainStatement(node *pg_query.Node, mode TransactionMod
 	if node == nil {
 		return nil
 	}
-	
+
 	switch n := node.Node.(type) {
 	case *pg_query.Node_UpdateStmt:
 		return a.analyzeUpdateMain(n.UpdateStmt)
@@ -173,10 +173,10 @@ func determineMostSevereOperation(operations []*operationInfo) *operationInfo {
 	if len(operations) == 0 {
 		return nil
 	}
-	
+
 	mostSevere := operations[0]
 	mostSevereSeverity := getSeverityLevel(mostSevere.operation)
-	
+
 	for _, op := range operations[1:] {
 		opSeverity := getSeverityLevel(op.operation)
 		if opSeverity > mostSevereSeverity {
@@ -184,7 +184,7 @@ func determineMostSevereOperation(operations []*operationInfo) *operationInfo {
 			mostSevereSeverity = opSeverity
 		}
 	}
-	
+
 	return mostSevere
 }
 
@@ -195,7 +195,7 @@ func (a *analyzer) analyzeUpdateMain(stmt *pg_query.UpdateStmt) *operationInfo {
 	if hasWhere {
 		operation = "UPDATE with WHERE"
 	}
-	
+
 	return &operationInfo{
 		operation: operation,
 		tableLock: RowExclusive,
@@ -209,7 +209,7 @@ func (a *analyzer) analyzeDeleteMain(stmt *pg_query.DeleteStmt) *operationInfo {
 	if hasWhere {
 		operation = "DELETE with WHERE"
 	}
-	
+
 	return &operationInfo{
 		operation: operation,
 		tableLock: RowExclusive,
@@ -219,7 +219,7 @@ func (a *analyzer) analyzeDeleteMain(stmt *pg_query.DeleteStmt) *operationInfo {
 // analyzeInsertMain analyzes INSERT without recursion
 func (a *analyzer) analyzeInsertMain(stmt *pg_query.InsertStmt) *operationInfo {
 	operation := "INSERT"
-	
+
 	// Check for INSERT SELECT first
 	if stmt.SelectStmt != nil {
 		// Only mark as INSERT SELECT if it's actually selecting from another table
@@ -228,12 +228,12 @@ func (a *analyzer) analyzeInsertMain(stmt *pg_query.InsertStmt) *operationInfo {
 			operation = "INSERT SELECT"
 		}
 	}
-	
+
 	// Check for ON CONFLICT (overrides INSERT SELECT)
 	if stmt.OnConflictClause != nil {
 		operation = "INSERT ON CONFLICT"
 	}
-	
+
 	return &operationInfo{
 		operation: operation,
 		tableLock: RowExclusive,
@@ -246,7 +246,7 @@ func (a *analyzer) analyzeSelectMain(stmt *pg_query.SelectStmt) *operationInfo {
 	if len(stmt.LockingClause) > 0 {
 		return a.analyzeLockingClause(stmt)
 	}
-	
+
 	// Check for INTO clause (SELECT INTO)
 	if stmt.IntoClause != nil {
 		return &operationInfo{
@@ -254,7 +254,7 @@ func (a *analyzer) analyzeSelectMain(stmt *pg_query.SelectStmt) *operationInfo {
 			tableLock: AccessShare,
 		}
 	}
-	
+
 	// Regular SELECT
 	return &operationInfo{
 		operation: "SELECT",
@@ -277,7 +277,7 @@ func extractTablesFromNode(node *pg_query.Node) []string {
 	if node == nil {
 		return nil
 	}
-	
+
 	tables := extractTables(node)
 	return tables
 }
@@ -312,17 +312,17 @@ func (a *analyzer) analyzeSelect(stmt *pg_query.SelectStmt) *operationInfo {
 	opInfo := a.analyzeDMLRecursive(&pg_query.Node{
 		Node: &pg_query.Node_SelectStmt{SelectStmt: stmt},
 	}, InTransaction)
-	
+
 	// If recursive analysis found a data-modifying operation, return it
 	if opInfo != nil && opInfo.operation != "SELECT" {
 		return opInfo
 	}
-	
+
 	// Check for locking clauses
 	if len(stmt.LockingClause) > 0 {
 		return a.analyzeLockingClause(stmt)
 	}
-	
+
 	// Check for INTO clause (SELECT INTO)
 	if stmt.IntoClause != nil {
 		return &operationInfo{
@@ -330,7 +330,7 @@ func (a *analyzer) analyzeSelect(stmt *pg_query.SelectStmt) *operationInfo {
 			tableLock: AccessShare,
 		}
 	}
-	
+
 	// Regular SELECT
 	return &operationInfo{
 		operation: "SELECT",
@@ -346,11 +346,11 @@ func (a *analyzer) analyzeLockingClause(stmt *pg_query.SelectStmt) *operationInf
 			tableLock: AccessShare,
 		}
 	}
-	
+
 	lockingClause := stmt.LockingClause[0]
 	hasWhere := stmt.WhereClause != nil
 	whereQualifier := ""
-	
+
 	lc := lockingClause.GetLockingClause()
 	if lc == nil {
 		return &operationInfo{
@@ -358,7 +358,7 @@ func (a *analyzer) analyzeLockingClause(stmt *pg_query.SelectStmt) *operationInf
 			tableLock: AccessShare,
 		}
 	}
-	
+
 	// For locking clauses, we need to determine the qualifier
 	switch lc.Strength {
 	case pg_query.LockClauseStrength_LCS_FORUPDATE:
@@ -424,7 +424,7 @@ func (a *analyzer) analyzeAlterTable(stmt *pg_query.AlterTableStmt) *operationIn
 			tableLock: AccessExclusive,
 		}
 	}
-	
+
 	// Analyze each command in the ALTER TABLE
 	for _, cmd := range stmt.Cmds {
 		alterCmd := cmd.GetAlterTableCmd()
@@ -435,7 +435,7 @@ func (a *analyzer) analyzeAlterTable(stmt *pg_query.AlterTableStmt) *operationIn
 			}
 		}
 	}
-	
+
 	return &operationInfo{
 		operation: "ALTER TABLE",
 		tableLock: AccessExclusive,
@@ -491,8 +491,8 @@ func (a *analyzer) analyzeAlterTableCmd(cmd *pg_query.AlterTableCmd) *operationI
 		}
 	case pg_query.AlterTableType_AT_AttachPartition:
 		opInfo := &operationInfo{
-			operation: "ALTER TABLE ATTACH PARTITION",
-			tableLock: ShareUpdateExclusive,
+			operation:            "ALTER TABLE ATTACH PARTITION",
+			tableLock:            ShareUpdateExclusive,
 			additionalTableLocks: make(map[string]LockType),
 		}
 		// The partition table is in cmd.Def as a PartitionCmd
@@ -508,8 +508,8 @@ func (a *analyzer) analyzeAlterTableCmd(cmd *pg_query.AlterTableCmd) *operationI
 	case pg_query.AlterTableType_AT_DetachPartition:
 		// Always return base operation - we'll check for CONCURRENTLY in the main analyzer
 		opInfo := &operationInfo{
-			operation: "ALTER TABLE DETACH PARTITION",
-			tableLock: ShareUpdateExclusive,
+			operation:            "ALTER TABLE DETACH PARTITION",
+			tableLock:            ShareUpdateExclusive,
 			additionalTableLocks: make(map[string]LockType),
 		}
 		// The partition table is in cmd.Def as a PartitionCmd
@@ -594,8 +594,8 @@ func (a *analyzer) analyzeAlterTableCmd(cmd *pg_query.AlterTableCmd) *operationI
 		}
 	case pg_query.AlterTableType_AT_AddInherit:
 		opInfo := &operationInfo{
-			operation: "ALTER TABLE INHERIT",
-			tableLock: AccessExclusive,
+			operation:            "ALTER TABLE INHERIT",
+			tableLock:            AccessExclusive,
 			additionalTableLocks: make(map[string]LockType),
 		}
 		// The parent table is in cmd.Def as a RangeVar
@@ -610,8 +610,8 @@ func (a *analyzer) analyzeAlterTableCmd(cmd *pg_query.AlterTableCmd) *operationI
 		return opInfo
 	case pg_query.AlterTableType_AT_DropInherit:
 		opInfo := &operationInfo{
-			operation: "ALTER TABLE NO INHERIT",
-			tableLock: AccessExclusive,
+			operation:            "ALTER TABLE NO INHERIT",
+			tableLock:            AccessExclusive,
 			additionalTableLocks: make(map[string]LockType),
 		}
 		// The parent table is in cmd.Def as a RangeVar
@@ -682,7 +682,7 @@ func (a *analyzer) analyzeAlterTableCmd(cmd *pg_query.AlterTableCmd) *operationI
 			tableLock: AccessExclusive,
 		}
 	}
-	
+
 	return nil
 }
 
@@ -694,7 +694,7 @@ func (a *analyzer) analyzeAddColumn(cmd *pg_query.AlterTableCmd) *operationInfo 
 			tableLock: AccessExclusive,
 		}
 	}
-	
+
 	colDef := cmd.Def.GetColumnDef()
 	if colDef == nil {
 		return &operationInfo{
@@ -702,7 +702,7 @@ func (a *analyzer) analyzeAddColumn(cmd *pg_query.AlterTableCmd) *operationInfo 
 			tableLock: AccessExclusive,
 		}
 	}
-	
+
 	// Check for GENERATED ALWAYS AS
 	if colDef.Identity != "" || colDef.Generated != "" {
 		return &operationInfo{
@@ -710,7 +710,7 @@ func (a *analyzer) analyzeAddColumn(cmd *pg_query.AlterTableCmd) *operationInfo 
 			tableLock: AccessExclusive,
 		}
 	}
-	
+
 	// Check for DEFAULT clause
 	for _, constraint := range colDef.Constraints {
 		if constr := constraint.GetConstraint(); constr != nil && constr.Contype == pg_query.ConstrType_CONSTR_DEFAULT {
@@ -729,7 +729,7 @@ func (a *analyzer) analyzeAddColumn(cmd *pg_query.AlterTableCmd) *operationInfo 
 			}
 		}
 	}
-	
+
 	return &operationInfo{
 		operation: "ALTER TABLE ADD COLUMN without DEFAULT",
 		tableLock: AccessExclusive,
@@ -741,7 +741,7 @@ func isVolatileDefault(expr *pg_query.Node) bool {
 	if expr == nil {
 		return false
 	}
-	
+
 	// Check for function calls
 	if funcCall := expr.GetFuncCall(); funcCall != nil {
 		funcName := ""
@@ -752,19 +752,19 @@ func isVolatileDefault(expr *pg_query.Node) bool {
 				}
 			}
 		}
-		
+
 		// List of known volatile functions
-		volatileFuncs := []string{"random", "now", "current_timestamp", "current_date", 
-			"current_time", "timeofday", "clock_timestamp", "statement_timestamp", 
+		volatileFuncs := []string{"random", "now", "current_timestamp", "current_date",
+			"current_time", "timeofday", "clock_timestamp", "statement_timestamp",
 			"transaction_timestamp", "uuid_generate_v4", "gen_random_uuid"}
-		
+
 		for _, vf := range volatileFuncs {
 			if strings.Contains(strings.ToLower(funcName), vf) {
 				return true
 			}
 		}
 	}
-	
+
 	return false
 }
 
@@ -776,7 +776,7 @@ func (a *analyzer) analyzeAddConstraint(cmd *pg_query.AlterTableCmd) *operationI
 			tableLock: AccessExclusive,
 		}
 	}
-	
+
 	constraint := cmd.Def.GetConstraint()
 	if constraint == nil {
 		return &operationInfo{
@@ -784,7 +784,7 @@ func (a *analyzer) analyzeAddConstraint(cmd *pg_query.AlterTableCmd) *operationI
 			tableLock: AccessExclusive,
 		}
 	}
-	
+
 	// Check for NOT VALID
 	if constraint.SkipValidation {
 		return &operationInfo{
@@ -792,7 +792,7 @@ func (a *analyzer) analyzeAddConstraint(cmd *pg_query.AlterTableCmd) *operationI
 			tableLock: ShareRowExclusive,
 		}
 	}
-	
+
 	switch constraint.Contype {
 	case pg_query.ConstrType_CONSTR_PRIMARY:
 		return &operationInfo{
@@ -811,8 +811,8 @@ func (a *analyzer) analyzeAddConstraint(cmd *pg_query.AlterTableCmd) *operationI
 		}
 	case pg_query.ConstrType_CONSTR_FOREIGN:
 		opInfo := &operationInfo{
-			operation: "ALTER TABLE ADD FOREIGN KEY",
-			tableLock: ShareRowExclusive,
+			operation:            "ALTER TABLE ADD FOREIGN KEY",
+			tableLock:            ShareRowExclusive,
 			additionalTableLocks: make(map[string]LockType),
 		}
 		// Extract referenced table from the constraint
@@ -829,7 +829,7 @@ func (a *analyzer) analyzeAddConstraint(cmd *pg_query.AlterTableCmd) *operationI
 			tableLock: AccessExclusive,
 		}
 	}
-	
+
 	return &operationInfo{
 		operation: "ALTER TABLE ADD CONSTRAINT",
 		tableLock: AccessExclusive,
@@ -845,8 +845,7 @@ func (a *analyzer) analyzeCreate(stmt *pg_query.CreateStmt) *operationInfo {
 			tableLock: AccessExclusive,
 		}
 	}
-	
-	
+
 	return &operationInfo{
 		operation: "CREATE TABLE",
 		tableLock: AccessExclusive,
@@ -859,7 +858,7 @@ func (a *analyzer) analyzeDrop(stmt *pg_query.DropStmt) *operationInfo {
 	if stmt.Behavior == pg_query.DropBehavior_DROP_CASCADE {
 		cascade = " CASCADE"
 	}
-	
+
 	switch stmt.RemoveType {
 	case pg_query.ObjectType_OBJECT_TABLE:
 		return &operationInfo{
@@ -1029,8 +1028,7 @@ func (a *analyzer) analyzeDrop(stmt *pg_query.DropStmt) *operationInfo {
 			tableLock: AccessExclusive,
 		}
 	}
-	
-	
+
 	return &operationInfo{
 		operation: "DROP",
 		tableLock: AccessExclusive,
@@ -1048,7 +1046,7 @@ func (a *analyzer) analyzeTruncate(stmt *pg_query.TruncateStmt) *operationInfo {
 // analyzeVacuum analyzes VACUUM statements
 func (a *analyzer) analyzeVacuum(stmt *pg_query.VacuumStmt) *operationInfo {
 	options := []string{}
-	
+
 	// Check for FULL option
 	for _, opt := range stmt.Options {
 		if defElem := opt.GetDefElem(); defElem != nil {
@@ -1063,17 +1061,17 @@ func (a *analyzer) analyzeVacuum(stmt *pg_query.VacuumStmt) *operationInfo {
 			}
 		}
 	}
-	
+
 	operation := "VACUUM"
 	if len(options) > 0 {
 		operation = "VACUUM " + strings.Join(options, " ")
 	}
-	
+
 	lockType := ShareUpdateExclusive
 	if contains(operation, "FULL") {
 		lockType = AccessExclusive
 	}
-	
+
 	return &operationInfo{
 		operation: operation,
 		tableLock: lockType,
@@ -1086,16 +1084,16 @@ func (a *analyzer) analyzeIndex(stmt *pg_query.IndexStmt) *operationInfo {
 	if stmt.Unique {
 		operation = "CREATE UNIQUE INDEX"
 	}
-	
+
 	if stmt.Concurrent {
 		operation = fmt.Sprintf("%s CONCURRENTLY", operation)
 	}
-	
+
 	lockType := Share
 	if stmt.Concurrent {
 		lockType = ShareUpdateExclusive
 	}
-	
+
 	return &operationInfo{
 		operation: operation,
 		tableLock: lockType,
@@ -1106,7 +1104,7 @@ func (a *analyzer) analyzeIndex(stmt *pg_query.IndexStmt) *operationInfo {
 func (a *analyzer) analyzeLock(stmt *pg_query.LockStmt) *operationInfo {
 	var lockType LockType
 	var operation string
-	
+
 	switch stmt.Mode {
 	case 1: // ACCESS SHARE
 		lockType = AccessShare
@@ -1136,7 +1134,7 @@ func (a *analyzer) analyzeLock(stmt *pg_query.LockStmt) *operationInfo {
 		lockType = AccessShare
 		operation = "LOCK TABLE"
 	}
-	
+
 	return &operationInfo{
 		operation: operation,
 		tableLock: lockType,
@@ -1230,7 +1228,7 @@ func (a *analyzer) analyzeReindex(stmt *pg_query.ReindexStmt) *operationInfo {
 			tableLock: AccessExclusive,
 		}
 	}
-	
+
 	return &operationInfo{
 		operation: "REINDEX",
 		tableLock: AccessExclusive,
@@ -1259,7 +1257,7 @@ func (a *analyzer) analyzeCreateMatView(stmt *pg_query.CreateTableAsStmt) *opera
 			tableLock: AccessExclusive,
 		}
 	}
-	
+
 	// Check if it's a materialized view
 	if stmt.Objtype == pg_query.ObjectType_OBJECT_MATVIEW {
 		return &operationInfo{
@@ -1267,7 +1265,7 @@ func (a *analyzer) analyzeCreateMatView(stmt *pg_query.CreateTableAsStmt) *opera
 			tableLock: AccessShare,
 		}
 	}
-	
+
 	// Default to CREATE TABLE AS
 	return &operationInfo{
 		operation: "CREATE TABLE AS",
@@ -1382,7 +1380,7 @@ func (a *analyzer) analyzeGrant(stmt *pg_query.GrantStmt) *operationInfo {
 	objType := ""
 	switch stmt.Objtype {
 	case pg_query.ObjectType_OBJECT_TABLE:
-		objType = ""  // For tables, just use GRANT/REVOKE without suffix
+		objType = "" // For tables, just use GRANT/REVOKE without suffix
 	case pg_query.ObjectType_OBJECT_SEQUENCE:
 		objType = " ON SEQUENCE"
 	case pg_query.ObjectType_OBJECT_DATABASE:
@@ -1402,7 +1400,7 @@ func (a *analyzer) analyzeGrant(stmt *pg_query.GrantStmt) *operationInfo {
 	case pg_query.ObjectType_OBJECT_FDW:
 		objType = " ON FOREIGN DATA WRAPPER"
 	}
-	
+
 	if stmt.IsGrant {
 		return &operationInfo{
 			operation: "GRANT" + objType,
@@ -1525,7 +1523,7 @@ func (a *analyzer) analyzeTransaction(stmt *pg_query.TransactionStmt) *operation
 			tableLock: AccessShare,
 		}
 	}
-	
+
 	return &operationInfo{
 		operation: "TRANSACTION",
 		tableLock: AccessShare,
@@ -1581,7 +1579,7 @@ func (a *analyzer) analyzeVariableSet(stmt *pg_query.VariableSetStmt) *operation
 			tableLock: AccessShare,
 		}
 	}
-	
+
 	return &operationInfo{
 		operation: "SET",
 		tableLock: AccessShare,
@@ -1639,16 +1637,17 @@ func (a *analyzer) analyzeCreatePublication(stmt *pg_query.CreatePublicationStmt
 // analyzeAlterPublication analyzes ALTER PUBLICATION statements
 func (a *analyzer) analyzeAlterPublication(stmt *pg_query.AlterPublicationStmt) *operationInfo {
 	operation := "ALTER PUBLICATION"
-	
+
 	// Check for specific actions
-	if stmt.Action == pg_query.AlterPublicationAction_AP_AddObjects {
+	switch stmt.Action {
+	case pg_query.AlterPublicationAction_AP_AddObjects:
 		operation = "ALTER PUBLICATION ADD TABLE"
-	} else if stmt.Action == pg_query.AlterPublicationAction_AP_DropObjects {
+	case pg_query.AlterPublicationAction_AP_DropObjects:
 		operation = "ALTER PUBLICATION DROP TABLE"
-	} else if stmt.Action == pg_query.AlterPublicationAction_AP_SetObjects {
+	case pg_query.AlterPublicationAction_AP_SetObjects:
 		operation = "ALTER PUBLICATION SET TABLE"
 	}
-	
+
 	return &operationInfo{
 		operation: operation,
 		tableLock: AccessExclusive,
@@ -1795,4 +1794,3 @@ func (a *analyzer) analyzeDefine(stmt *pg_query.DefineStmt) *operationInfo {
 func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
-

@@ -36,3 +36,6 @@ testdata/
 # Local configuration
 *.local
 CLAUDE.local.md
+
+# GoReleaser
+dist/

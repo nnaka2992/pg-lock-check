@@ -9,19 +9,19 @@ func extractTables(node *pg_query.Node) []string {
 	if node == nil {
 		return nil
 	}
-	
+
 	extractor := &tableExtractor{
 		tables: make(map[string]bool),
 	}
-	
+
 	extractor.extractFromNode(node)
-	
+
 	// Convert map to slice
 	result := make([]string, 0, len(extractor.tables))
 	for table := range extractor.tables {
 		result = append(result, table)
 	}
-	
+
 	return result
 }
 
@@ -30,9 +30,9 @@ func extractTablesWithContext(node *pg_query.Node) map[string]LockType {
 	if node == nil {
 		return nil
 	}
-	
+
 	result := make(map[string]LockType)
-	
+
 	// Handle specific statement types that have different locks for different tables
 	switch n := node.Node.(type) {
 	case *pg_query.Node_UpdateStmt:
@@ -123,12 +123,12 @@ func extractTablesWithContext(node *pg_query.Node) map[string]LockType {
 				pg_query.ObjectType_OBJECT_POLICY:
 				tables := extractTables(node)
 				lockType := AccessExclusive
-				
+
 				// Special case for DROP INDEX CONCURRENTLY
 				if n.DropStmt.RemoveType == pg_query.ObjectType_OBJECT_INDEX && n.DropStmt.Concurrent {
 					lockType = ShareUpdateExclusive
 				}
-				
+
 				for _, table := range tables {
 					result[table] = lockType
 				}
@@ -147,7 +147,7 @@ func extractTablesWithContext(node *pg_query.Node) map[string]LockType {
 			// REINDEX gets AccessExclusive lock (except CONCURRENTLY)
 			tables := extractTables(node)
 			lockType := AccessExclusive
-			
+
 			// Check for CONCURRENTLY
 			if n.ReindexStmt.Params != nil {
 				for _, defElem := range n.ReindexStmt.Params {
@@ -157,7 +157,7 @@ func extractTablesWithContext(node *pg_query.Node) map[string]LockType {
 					}
 				}
 			}
-			
+
 			for _, table := range tables {
 				result[table] = lockType
 			}
@@ -169,7 +169,7 @@ func extractTablesWithContext(node *pg_query.Node) map[string]LockType {
 		// For other statements, don't set a default lock type - let the main analyzer handle it
 		return nil
 	}
-	
+
 	return result
 }
 
@@ -178,13 +178,13 @@ func extractReadTables(node *pg_query.Node, result map[string]LockType) {
 	if node == nil {
 		return
 	}
-	
+
 	extractor := &tableExtractor{
 		tables: make(map[string]bool),
 	}
-	
+
 	extractor.extractFromNode(node)
-	
+
 	for table := range extractor.tables {
 		// Only add if not already present (write locks take precedence)
 		if _, exists := result[table]; !exists {
@@ -203,7 +203,7 @@ func (e *tableExtractor) extractFromNode(node *pg_query.Node) {
 	if node == nil {
 		return
 	}
-	
+
 	// Handle different node types
 	switch n := node.Node.(type) {
 	case *pg_query.Node_RangeVar:
@@ -292,12 +292,12 @@ func (e *tableExtractor) extractFromRangeVar(rv *pg_query.RangeVar) {
 	if rv == nil {
 		return
 	}
-	
+
 	tableName := rv.Relname
 	if rv.Schemaname != "" {
 		tableName = rv.Schemaname + "." + rv.Relname
 	}
-	
+
 	if tableName != "" {
 		e.tables[tableName] = true
 	}
@@ -308,22 +308,22 @@ func (e *tableExtractor) extractFromUpdateStmt(stmt *pg_query.UpdateStmt) {
 	if stmt == nil {
 		return
 	}
-	
+
 	// Extract target table
 	if stmt.Relation != nil {
 		e.extractFromRangeVar(stmt.Relation)
 	}
-	
+
 	// Extract from FROM clause
 	for _, from := range stmt.FromClause {
 		e.extractFromNode(from)
 	}
-	
+
 	// Extract from WHERE clause
 	if stmt.WhereClause != nil {
 		e.extractFromNode(stmt.WhereClause)
 	}
-	
+
 	// Extract from RETURNING clause
 	for _, ret := range stmt.ReturningList {
 		e.extractFromNode(ret)
@@ -335,17 +335,17 @@ func (e *tableExtractor) extractFromDeleteStmt(stmt *pg_query.DeleteStmt) {
 	if stmt == nil {
 		return
 	}
-	
+
 	// Extract target table
 	if stmt.Relation != nil {
 		e.extractFromRangeVar(stmt.Relation)
 	}
-	
+
 	// Extract from USING clause
 	for _, using := range stmt.UsingClause {
 		e.extractFromNode(using)
 	}
-	
+
 	// Extract from WHERE clause
 	if stmt.WhereClause != nil {
 		e.extractFromNode(stmt.WhereClause)
@@ -357,12 +357,12 @@ func (e *tableExtractor) extractFromInsertStmt(stmt *pg_query.InsertStmt) {
 	if stmt == nil {
 		return
 	}
-	
+
 	// Extract target table
 	if stmt.Relation != nil {
 		e.extractFromRangeVar(stmt.Relation)
 	}
-	
+
 	// Extract from SELECT statement
 	if stmt.SelectStmt != nil {
 		e.extractFromNode(stmt.SelectStmt)
@@ -374,29 +374,29 @@ func (e *tableExtractor) extractFromSelectStmt(stmt *pg_query.SelectStmt) {
 	if stmt == nil {
 		return
 	}
-	
+
 	// Extract from FROM clause
 	for _, from := range stmt.FromClause {
 		e.extractFromNode(from)
 	}
-	
+
 	// Extract from WHERE clause
 	if stmt.WhereClause != nil {
 		e.extractFromNode(stmt.WhereClause)
 	}
-	
+
 	// Extract from WITH clause (CTEs)
 	if stmt.WithClause != nil {
 		for _, cte := range stmt.WithClause.Ctes {
 			e.extractFromNode(cte)
 		}
 	}
-	
+
 	// Extract from subqueries in target list
 	for _, target := range stmt.TargetList {
 		e.extractFromNode(target)
 	}
-	
+
 	// Handle set operations (UNION, INTERSECT, EXCEPT)
 	if stmt.Larg != nil {
 		e.extractFromSelectStmt(stmt.Larg)
@@ -411,7 +411,7 @@ func (e *tableExtractor) extractFromAlterTableStmt(stmt *pg_query.AlterTableStmt
 	if stmt == nil {
 		return
 	}
-	
+
 	if stmt.Relation != nil {
 		e.extractFromRangeVar(stmt.Relation)
 	}
@@ -422,18 +422,18 @@ func (e *tableExtractor) extractFromCreateStmt(stmt *pg_query.CreateStmt) {
 	if stmt == nil {
 		return
 	}
-	
+
 	// Don't extract the table being created, only referenced tables
 	// Extract from INHERITS clause
 	for _, inherit := range stmt.InhRelations {
 		e.extractFromNode(inherit)
 	}
-	
+
 	// Extract from table constraints (foreign keys, etc.)
 	for _, constraint := range stmt.Constraints {
 		e.extractFromNode(constraint)
 	}
-	
+
 	// Extract from LIKE clause
 	for _, tableElt := range stmt.TableElts {
 		e.extractFromNode(tableElt)
@@ -445,7 +445,7 @@ func (e *tableExtractor) extractFromDropStmt(stmt *pg_query.DropStmt) {
 	if stmt == nil {
 		return
 	}
-	
+
 	// Extract object names for all DROP types that we track
 	switch stmt.RemoveType {
 	case pg_query.ObjectType_OBJECT_TABLE,
@@ -465,7 +465,7 @@ func (e *tableExtractor) extractFromDropStmt(stmt *pg_query.DropStmt) {
 						parts = append(parts, strNode.String_.Sval)
 					}
 				}
-				
+
 				// Handle different DROP types
 				var objName string
 				switch stmt.RemoveType {
@@ -497,7 +497,7 @@ func (e *tableExtractor) extractFromDropStmt(stmt *pg_query.DropStmt) {
 						objName = parts[len(parts)-2] + "." + parts[len(parts)-1]
 					}
 				}
-				
+
 				if objName != "" {
 					e.tables[objName] = true
 				}
@@ -511,7 +511,7 @@ func (e *tableExtractor) extractFromTruncateStmt(stmt *pg_query.TruncateStmt) {
 	if stmt == nil {
 		return
 	}
-	
+
 	for _, rel := range stmt.Relations {
 		e.extractFromNode(rel)
 	}
@@ -522,7 +522,7 @@ func (e *tableExtractor) extractFromIndexStmt(stmt *pg_query.IndexStmt) {
 	if stmt == nil {
 		return
 	}
-	
+
 	if stmt.Relation != nil {
 		e.extractFromRangeVar(stmt.Relation)
 	}
@@ -533,7 +533,7 @@ func (e *tableExtractor) extractFromVacuumStmt(stmt *pg_query.VacuumStmt) {
 	if stmt == nil {
 		return
 	}
-	
+
 	for _, rel := range stmt.Rels {
 		e.extractFromNode(rel)
 	}
@@ -544,7 +544,7 @@ func (e *tableExtractor) extractFromClusterStmt(stmt *pg_query.ClusterStmt) {
 	if stmt == nil {
 		return
 	}
-	
+
 	if stmt.Relation != nil {
 		e.extractFromRangeVar(stmt.Relation)
 	}
@@ -555,11 +555,11 @@ func (e *tableExtractor) extractFromCopyStmt(stmt *pg_query.CopyStmt) {
 	if stmt == nil {
 		return
 	}
-	
+
 	if stmt.Relation != nil {
 		e.extractFromRangeVar(stmt.Relation)
 	}
-	
+
 	// Extract from query
 	if stmt.Query != nil {
 		e.extractFromNode(stmt.Query)
@@ -571,7 +571,7 @@ func (e *tableExtractor) extractFromCreateTableAsStmt(stmt *pg_query.CreateTable
 	if stmt == nil {
 		return
 	}
-	
+
 	// Extract from query (source tables)
 	if stmt.Query != nil {
 		e.extractFromNode(stmt.Query)
@@ -583,7 +583,7 @@ func (e *tableExtractor) extractFromViewStmt(stmt *pg_query.ViewStmt) {
 	if stmt == nil {
 		return
 	}
-	
+
 	// Extract from query
 	if stmt.Query != nil {
 		e.extractFromNode(stmt.Query)
@@ -595,7 +595,7 @@ func (e *tableExtractor) extractFromRefreshMatViewStmt(stmt *pg_query.RefreshMat
 	if stmt == nil {
 		return
 	}
-	
+
 	if stmt.Relation != nil {
 		e.extractFromRangeVar(stmt.Relation)
 	}
@@ -606,7 +606,7 @@ func (e *tableExtractor) extractFromLockStmt(stmt *pg_query.LockStmt) {
 	if stmt == nil {
 		return
 	}
-	
+
 	for _, rel := range stmt.Relations {
 		e.extractFromNode(rel)
 	}
@@ -617,7 +617,7 @@ func (e *tableExtractor) extractFromCreateTrigStmt(stmt *pg_query.CreateTrigStmt
 	if stmt == nil {
 		return
 	}
-	
+
 	if stmt.Relation != nil {
 		e.extractFromRangeVar(stmt.Relation)
 	}
@@ -628,7 +628,7 @@ func (e *tableExtractor) extractFromRuleStmt(stmt *pg_query.RuleStmt) {
 	if stmt == nil {
 		return
 	}
-	
+
 	if stmt.Relation != nil {
 		e.extractFromRangeVar(stmt.Relation)
 	}
@@ -639,7 +639,7 @@ func (e *tableExtractor) extractFromCreatePolicyStmt(stmt *pg_query.CreatePolicy
 	if stmt == nil {
 		return
 	}
-	
+
 	if stmt.Table != nil {
 		e.extractFromRangeVar(stmt.Table)
 	}
@@ -650,7 +650,7 @@ func (e *tableExtractor) extractFromGrantStmt(stmt *pg_query.GrantStmt) {
 	if stmt == nil {
 		return
 	}
-	
+
 	// Only extract for table-related grants
 	if stmt.Objtype == pg_query.ObjectType_OBJECT_TABLE {
 		for _, obj := range stmt.Objects {
@@ -664,17 +664,17 @@ func (e *tableExtractor) extractFromMergeStmt(stmt *pg_query.MergeStmt) {
 	if stmt == nil {
 		return
 	}
-	
+
 	// Extract target table
 	if stmt.Relation != nil {
 		e.extractFromRangeVar(stmt.Relation)
 	}
-	
+
 	// Extract source table/query
 	if stmt.SourceRelation != nil {
 		e.extractFromNode(stmt.SourceRelation)
 	}
-	
+
 	// Extract from join condition
 	if stmt.JoinCondition != nil {
 		e.extractFromNode(stmt.JoinCondition)
@@ -686,7 +686,7 @@ func (e *tableExtractor) extractFromReindexStmt(stmt *pg_query.ReindexStmt) {
 	if stmt == nil {
 		return
 	}
-	
+
 	// Only extract for table/index reindexing
 	if stmt.Kind == pg_query.ReindexObjectType_REINDEX_OBJECT_TABLE ||
 		stmt.Kind == pg_query.ReindexObjectType_REINDEX_OBJECT_INDEX {
@@ -701,7 +701,7 @@ func (e *tableExtractor) extractFromAlterPublicationStmt(stmt *pg_query.AlterPub
 	if stmt == nil {
 		return
 	}
-	
+
 	// Extract from publication object specs
 	for _, pubobj := range stmt.Pubobjects {
 		e.extractFromNode(pubobj)
@@ -713,7 +713,7 @@ func (e *tableExtractor) extractFromRenameStmt(stmt *pg_query.RenameStmt) {
 	if stmt == nil {
 		return
 	}
-	
+
 	// For table/view/sequence/matview renames, extract the source table
 	switch stmt.RenameType {
 	case pg_query.ObjectType_OBJECT_TABLE,
@@ -744,7 +744,7 @@ func (e *tableExtractor) extractFromAlterObjectSchemaStmt(stmt *pg_query.AlterOb
 	if stmt == nil {
 		return
 	}
-	
+
 	// For table/view/sequence/matview schema changes, extract the table
 	switch stmt.ObjectType {
 	case pg_query.ObjectType_OBJECT_TABLE,
@@ -765,7 +765,7 @@ func (e *tableExtractor) extractFromJoinExpr(join *pg_query.JoinExpr) {
 	if join == nil {
 		return
 	}
-	
+
 	// Extract from left and right sides
 	if join.Larg != nil {
 		e.extractFromNode(join.Larg)
@@ -773,7 +773,7 @@ func (e *tableExtractor) extractFromJoinExpr(join *pg_query.JoinExpr) {
 	if join.Rarg != nil {
 		e.extractFromNode(join.Rarg)
 	}
-	
+
 	// Extract from join condition
 	if join.Quals != nil {
 		e.extractFromNode(join.Quals)
@@ -785,12 +785,12 @@ func (e *tableExtractor) extractFromFromExpr(from *pg_query.FromExpr) {
 	if from == nil {
 		return
 	}
-	
+
 	// Extract from FROM list
 	for _, item := range from.Fromlist {
 		e.extractFromNode(item)
 	}
-	
+
 	// Extract from WHERE clause
 	if from.Quals != nil {
 		e.extractFromNode(from.Quals)
@@ -802,20 +802,11 @@ func (e *tableExtractor) extractFromSubLink(sublink *pg_query.SubLink) {
 	if sublink == nil {
 		return
 	}
-	
+
 	// Extract from subselect
 	if sublink.Subselect != nil {
 		e.extractFromNode(sublink.Subselect)
 	}
-}
-
-// extractFromSubSelect extracts tables from subselects
-func (e *tableExtractor) extractFromSubSelect(sub *pg_query.SelectStmt) {
-	if sub == nil {
-		return
-	}
-	
-	e.extractFromSelectStmt(sub)
 }
 
 // extractFromCommonTableExpr extracts tables from CTEs
@@ -823,7 +814,7 @@ func (e *tableExtractor) extractFromCommonTableExpr(cte *pg_query.CommonTableExp
 	if cte == nil {
 		return
 	}
-	
+
 	// Extract from CTE query
 	if cte.Ctequery != nil {
 		e.extractFromNode(cte.Ctequery)
@@ -835,7 +826,7 @@ func (e *tableExtractor) extractFromList(list *pg_query.List) {
 	if list == nil {
 		return
 	}
-	
+
 	for _, item := range list.Items {
 		e.extractFromNode(item)
 	}
@@ -846,11 +837,11 @@ func getQualifiedTableName(rv *pg_query.RangeVar) string {
 	if rv == nil {
 		return ""
 	}
-	
+
 	tableName := rv.Relname
 	if rv.Schemaname != "" {
 		tableName = rv.Schemaname + "." + rv.Relname
 	}
-	
+
 	return tableName
 }
