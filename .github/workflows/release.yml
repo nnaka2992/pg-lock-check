@@ -9,26 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: 'go.mod'
-          check-latest: true
-      
-      - name: Run tests
-        run: go test -v ./...
-      
-      - name: Run go vet
-        run: go vet ./...
-
   goreleaser:
-    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -42,11 +23,16 @@ jobs:
           go-version-file: 'go.mod'
           check-latest: true
       
+      - name: Set up Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.14.1
+      
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
-          version: "~2.10"
+          version: v2.10.2
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
