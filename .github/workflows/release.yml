@@ -119,19 +119,10 @@ jobs:
             -o pg-lock-check-windows-amd64.exe \
             ./cmd/pg-lock-check
       
-      - name: Build Windows ARM64
-        shell: bash
-        run: |
-          CGO_ENABLED=1 GOOS=windows GOARCH=arm64 go build \
-            -ldflags="-s -w -X main.version=${{ steps.version.outputs.version }}" \
-            -o pg-lock-check-windows-arm64.exe \
-            ./cmd/pg-lock-check
-      
       - name: Create archives
         shell: bash
         run: |
           7z a pg-lock-check-${{ steps.version.outputs.version }}-windows-amd64.zip pg-lock-check-windows-amd64.exe README.md LICENSE
-          7z a pg-lock-check-${{ steps.version.outputs.version }}-windows-arm64.zip pg-lock-check-windows-arm64.exe README.md LICENSE
       
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -193,7 +184,9 @@ jobs:
             
             - Linux: amd64, arm64
             - macOS: amd64 (Intel), arm64 (Apple Silicon)
-            - Windows: amd64, arm64
+            - Windows: amd64
+            
+            Note: Windows ARM64 users need to build from source due to CGO toolchain limitations.
             
             ### Verify Downloads
             
