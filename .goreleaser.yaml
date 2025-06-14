@@ -8,6 +8,8 @@ builds:
   - id: pg-lock-check
     main: ./cmd/pg-lock-check
     binary: pg-lock-check
+    env:
+      - CGO_ENABLED=0
     goos:
       - linux
       - darwin
@@ -17,32 +19,6 @@ builds:
       - arm64
     ldflags:
       - -s -w -X main.version={{.Version}}
-    flags:
-      - -trimpath
-    env:
-      - CGO_ENABLED=1
-      - >-
-        {{- if eq .Os "darwin" }}
-          {{- if eq .Arch "amd64"}}CC=zig cc -target x86_64-macos-none -F{{ .Env.SDK_PATH }}/System/Library/Frameworks{{- end }}
-          {{- if eq .Arch "arm64"}}CC=zig cc -target aarch64-macos-none -F{{ .Env.SDK_PATH }}/System/Library/Frameworks{{- end }}
-        {{- else if eq .Os "linux" }}
-          {{- if eq .Arch "amd64" }}CC=zig cc -target x86_64-linux-musl{{- end }}
-          {{- if eq .Arch "arm64"}}CC=zig cc -target aarch64-linux-musl{{- end }}
-        {{- else if eq .Os "windows" }}
-          {{- if eq .Arch "amd64" }}CC=zig cc -target x86_64-windows-gnu{{- end }}
-          {{- if eq .Arch "arm64"}}CC=zig cc -target aarch64-windows-gnu{{- end }}
-        {{- end }}
-      - >-
-        {{- if eq .Os "darwin" }}
-          {{- if eq .Arch "amd64"}}CXX=zig c++ -target x86_64-macos-none -F{{ .Env.SDK_PATH }}/System/Library/Frameworks{{- end }}
-          {{- if eq .Arch "arm64"}}CXX=zig c++ -target aarch64-macos-none -F{{ .Env.SDK_PATH }}/System/Library/Frameworks{{- end }}
-        {{- else if eq .Os "linux" }}
-          {{- if eq .Arch "amd64" }}CXX=zig c++ -target x86_64-linux-musl{{- end }}
-          {{- if eq .Arch "arm64"}}CXX=zig c++ -target aarch64-linux-musl{{- end }}
-        {{- else if eq .Os "windows" }}
-          {{- if eq .Arch "amd64" }}CXX=zig c++ -target x86_64-windows-gnu{{- end }}
-          {{- if eq .Arch "arm64"}}CXX=zig c++ -target aarch64-windows-gnu{{- end }}
-        {{- end }}
 
 archives:
   - id: default
