@@ -89,11 +89,9 @@ summary:
 ```
 
 ## Exit Codes
-- `0` - No issues or only INFO level
-- `1` - Has WARNING level issues
-- `2` - Has CRITICAL level issues  
-- `3` - Has ERROR level issues
-- `4` - Invalid input/arguments
+- `0` - Success (analysis completed, regardless of severity)
+- `1` - Runtime error (file not found, read errors, etc.)
+- `2` - Parse error (invalid SQL syntax)
 
 ## Examples
 
