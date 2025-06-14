@@ -1,155 +1,242 @@
-# pg-lock-check
+<div align="center">
+
+# 🔒 pg-lock-check
+
+### Stop PostgreSQL Locks Before They Stop You
+
+[English](README.md) | [日本語](README.ja.md) | [中文](README.zh.md)
 
 [![CI](https://github.com/nnaka2992/pg-lock-check/actions/workflows/ci.yml/badge.svg)](https://github.com/nnaka2992/pg-lock-check/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/nnaka2992/pg-lock-check)](https://goreportcard.com/report/github.com/nnaka2992/pg-lock-check)
+[![Go Reference](https://pkg.go.dev/badge/github.com/nnaka2992/pg-lock-check.svg)](https://pkg.go.dev/github.com/nnaka2992/pg-lock-check)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A PostgreSQL lock analyzer that examines SQL statements for potential locking issues and provides severity-based warnings about operations that could cause database locks or blocking.
+**Catch dangerous PostgreSQL migrations before they bring down production** 🚨
 
-## Overview
+![pg-lock-check demo](docs/assets/demo.gif)
 
-`pg-lock-check` analyzes SQL statements and warns about operations that could cause table locks, helping developers and DBAs identify potentially problematic queries before they impact production databases.
+[**Quick Start**](#-quick-start) • [**Why You Need This**](#-why-you-need-this) • [**Installation**](#-installation) • [**Usage**](#-usage) • [**CI/CD Integration**](#-cicd-integration)
 
-## Features
+</div>
 
-- **Transaction-aware analysis**: Different severity levels for operations inside vs outside transactions
-- **229 PostgreSQL operations mapped**: Comprehensive coverage of DDL, DML, and maintenance operations
-- **Multiple severity levels**: ERROR, CRITICAL, WARNING, INFO
-- **Flexible input methods**: Direct SQL, files, or stdin
-- **Multiple output formats**: Text (default), JSON, YAML
-- **Exit codes for CI/CD**: Different exit codes based on highest severity found
+---
 
-## Installation
+## 🚀 Quick Start
+
+```bash
+# Install in 5 seconds
+go install github.com/nnaka2992/pg-lock-check/cmd/pg-lock-check@latest
+
+# Catch that dangerous migration
+$ pg-lock-check "UPDATE users SET active = false"
+[CRITICAL] UPDATE users SET active = false
+
+Summary: 1 statements analyzed
+
+# Check your migration files
+$ pg-lock-check -f migrations/*.sql
+```
+
+## 💡 Why You Need This
+
+Ever had a "quick" database migration take down your entire app? Yeah, we've been there too.
+
+```sql
+-- Looks innocent, right? WRONG! 💀
+UPDATE users SET last_login = NOW();
+-- ☠️ LOCKS ENTIRE TABLE - RIP your app
+```
+
+**pg-lock-check** catches these disasters **before** they happen:
+
+- 🎯 **229 PostgreSQL operations analyzed** - We know what locks and what doesn't
+- ⚡ **Instant feedback** - Know in milliseconds, not after your pager goes off
+- 🔄 **Transaction-aware** - Different rules for inside/outside transactions
+- 🚦 **CI/CD ready** - Block dangerous migrations automatically
+
+## ✨ Features
+
+- 🧠 **Smart Analysis** - Knows the difference between `UPDATE` with and without `WHERE`
+- 🎭 **Transaction Context** - `CREATE INDEX CONCURRENTLY` works outside transactions, fails inside
+- 📊 **Multiple Output Formats** - Human-readable, JSON for your tools, YAML because why not
+- 🚪 **Exit Codes That Make Sense** - Perfect for CI/CD pipelines
+- 📁 **Bulk Analysis** - Check entire migration directories at once
+- ⚡ **Lightning Fast** - Won't slow down your CI/CD pipeline
+
+## 📦 Installation
+
+<details>
+<summary><b>Option 1: Install with Go</b> (Recommended)</summary>
 
 ```bash
 go install github.com/nnaka2992/pg-lock-check/cmd/pg-lock-check@latest
 ```
+</details>
 
-Or build from source:
+<details>
+<summary><b>Option 2: Download Binary</b></summary>
+
+Grab the latest from the [releases page](https://github.com/nnaka2992/pg-lock-check/releases).
+
+</details>
+
+<details>
+<summary><b>Option 3: Build from Source</b></summary>
 
 ```bash
 git clone https://github.com/nnaka2992/pg-lock-check.git
 cd pg-lock-check
 go build -o pg-lock-check ./cmd/pg-lock-check
 ```
+</details>
 
-## Usage
+## 🎯 Usage
 
-### Basic usage
+### Real-World Examples
+
+#### 😱 The Horror Story
+```bash
+# This innocent-looking query...
+$ pg-lock-check "UPDATE users SET preferences = '{}'"
+[CRITICAL] UPDATE users SET preferences = '{}'
+
+Summary: 1 statements analyzed
+```
+
+#### 🎉 The Happy Path
+```bash
+# Add a WHERE clause, save your weekend
+$ pg-lock-check "UPDATE users SET preferences = '{}' WHERE id = 123"
+[WARNING] UPDATE users SET preferences = '{}' WHERE id = 123
+
+Summary: 1 statements analyzed
+```
+
+### 🔧 Common Scenarios
+
+<details>
+<summary><b>Check Your Migration Files</b></summary>
 
 ```bash
-# Analyze a single SQL statement
-pg-lock-check "ALTER TABLE users ADD COLUMN age INT DEFAULT 0"
+# Single file
+pg-lock-check -f migrations/20240114_add_index.sql
 
-# Analyze SQL from a file
-pg-lock-check -f migration.sql
-
-# Analyze multiple files
+# All migrations at once
 pg-lock-check -f migrations/*.sql
 
-# Read from stdin
-echo "TRUNCATE TABLE users" | pg-lock-check
+# From your CI/CD pipeline
+pg-lock-check -f migrations/*.sql || exit 1
 ```
+</details>
 
-### Transaction modes
-
-By default, pg-lock-check assumes SQL runs inside a transaction:
+<details>
+<summary><b>Handle CREATE INDEX CONCURRENTLY</b></summary>
 
 ```bash
-# Default: analyze as if wrapped in BEGIN/COMMIT
-pg-lock-check "CREATE INDEX CONCURRENTLY idx ON users(email)"
-# Output: [ERROR] Cannot run inside a transaction block
+# ❌ Inside a transaction - FAILS
+$ pg-lock-check "CREATE INDEX CONCURRENTLY idx_users_email ON users(email)"
+[ERROR] CREATE INDEX CONCURRENTLY idx_users_email ON users(email)
 
-# Analyze without transaction wrapper
-pg-lock-check --no-transaction "CREATE INDEX CONCURRENTLY idx ON users(email)"
-# Output: [WARNING] Creates ShareUpdateExclusiveLock on users
+Summary: 1 statements analyzed
+
+# ✅ Outside a transaction - WORKS
+$ pg-lock-check --no-transaction "CREATE INDEX CONCURRENTLY idx_users_email ON users(email)"
+[WARNING] CREATE INDEX CONCURRENTLY idx_users_email ON users(email)
+
+Summary: 1 statements analyzed
 ```
+</details>
 
-### Output formats
+<details>
+<summary><b>JSON Output for Your Tools</b></summary>
 
 ```bash
-# Default text output
-pg-lock-check "UPDATE users SET active = true"
+pg-lock-check -o json "TRUNCATE users" | jq '.severity'
+# "CRITICAL"
 
-# JSON output for programmatic use
-pg-lock-check -o json "UPDATE users SET active = true"
-
-# YAML output
-pg-lock-check -o yaml "UPDATE users SET active = true"
-```
-
-### Filtering by severity
-
-```bash
-# Only show warnings and above (ignore INFO)
-pg-lock-check --ignore-info -f migration.sql
-
-# Set minimum severity level
-pg-lock-check -s critical -f migration.sql
-```
-
-## Severity Levels
-
-- **ERROR**: Operations that cannot run in the current mode (e.g., VACUUM in transaction)
-- **CRITICAL**: Operations causing severe locks (e.g., TRUNCATE, DROP TABLE, UPDATE without WHERE)
-- **WARNING**: Operations with moderate impact (e.g., CREATE INDEX, targeted UPDATE/DELETE)
-- **INFO**: Operations with minimal impact (e.g., simple INSERT, SELECT)
-
-## Exit Codes
-
-- `0`: No issues or only INFO level
-- `1`: Has WARNING level issues
-- `2`: Has CRITICAL level issues
-- `3`: Has ERROR level issues
-- `4`: Invalid input/arguments
-
-## Examples
-
-### CI/CD Integration
-
-```bash
-#!/bin/bash
-# Check migration files before deployment
-pg-lock-check -f migrations/*.sql
-if [ $? -ge 2 ]; then
-    echo "Critical locking issues found!"
-    exit 1
+# Use in scripts
+SEVERITY=$(pg-lock-check -o json "$SQL" | jq -r '.results[0].severity')
+if [ "$SEVERITY" = "CRITICAL" ]; then
+  echo "🚨 DANGER! Don't run this in production!"
+  exit 1
 fi
+```
+</details>
+
+## 🚦 Severity Levels
+
+| Level | What It Means | Example | Should You Run It? |
+|-------|--------------|---------|-------------------|
+| 🔴 **ERROR** | Can't run in this mode | `VACUUM` inside transaction | ❌ Fix your code |
+| 🟠 **CRITICAL** | Table-wide locks | `UPDATE users SET active = true` | ⚠️ Only at 3 AM |
+| 🟡 **WARNING** | Row/page locks | `UPDATE users SET ... WHERE id = 1` | ✅ Probably fine |
+| 🟢 **INFO** | You're good | `SELECT * FROM users` | ✅ Ship it! |
+
+### Exit Codes
+
+- `0`: Success - Analysis completed
+- `1`: Runtime error - File not found, read errors, etc.
+- `2`: Parse error - Invalid SQL syntax
+
+## 🚀 CI/CD Integration
+
+### GitHub Actions
+```yaml
+name: Check Migrations
+on: [pull_request]
+
+jobs:
+  check-locks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+      - run: go install github.com/nnaka2992/pg-lock-check/cmd/pg-lock-check@latest
+      - name: Check for dangerous locks
+        run: |
+          pg-lock-check -f migrations/*.sql -o json | \
+          jq -e '.results[] | select(.severity == "CRITICAL" or .severity == "ERROR")' && \
+          echo "🚨 Dangerous operations detected!" && exit 1 || \
+          echo "✅ Migrations look safe!"
 ```
 
 ### Pre-commit Hook
-
 ```bash
 #!/bin/bash
 # .git/hooks/pre-commit
 files=$(git diff --cached --name-only --diff-filter=ACM | grep '\.sql$')
 if [ -n "$files" ]; then
+    echo "🔍 Checking SQL files for lock issues..."
     pg-lock-check -f $files || exit 1
 fi
 ```
 
-## Development
+## 🛠️ Development
 
 ```bash
-# Run tests
+# Clone & test
+git clone https://github.com/nnaka2992/pg-lock-check.git
+cd pg-lock-check
 go test ./...
-
-# Run with coverage
-go test -cover ./...
 
 # Build
 go build -o pg-lock-check ./cmd/pg-lock-check
 ```
 
-## Architecture
+## 🏗️ Architecture
 
-The tool consists of three main components:
+- **Parser**: Wraps `pg_query_go` for PostgreSQL AST parsing
+- **Analyzer**: Maps 229 operations to lock severity levels  
+- **CLI**: Clean interface with multiple output formats
 
-1. **Parser**: Wraps `pg_query_go` to parse SQL into AST
-2. **Analyzer**: Maps PostgreSQL operations to lock severity levels
-3. **CLI**: Command-line interface with multiple output formats
+## 🤝 Contributing
 
-## Contributing
+Found a bug? Want a feature? PRs welcome!
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+## 🔮 Future Work
+
+- **Real-world severity**: Base severity on actual production impact, not just lock types
+- **Safe migration suggestions**: Automatically suggest safer alternatives for dangerous operations
 
 ## License
 
