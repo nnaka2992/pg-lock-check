@@ -39,7 +39,7 @@ func (r *operationRegistry) register(operation string, inTxn, noTxn *registryOpe
 	}
 }
 
-// initializeOperations populates the registry with all operations from lock_severity.md
+// initializeOperations populates the registry with all operations from docs/design/lock_severity.md
 func (r *operationRegistry) initializeOperations() {
 	// ERROR operations (only in transaction mode)
 	r.register("CREATE DATABASE",
