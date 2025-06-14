@@ -92,47 +92,47 @@ func TestRun(t *testing.T) {
 			oldStdout := os.Stdout
 			oldStderr := os.Stderr
 			oldStdin := os.Stdin
-			
+
 			stdout := &bytes.Buffer{}
 			stderr := &bytes.Buffer{}
-			
+
 			r, w, _ := os.Pipe()
 			os.Stdout = w
-			
+
 			rErr, wErr, _ := os.Pipe()
 			os.Stderr = wErr
-			
+
 			if tt.stdin != "" {
 				rIn, wIn, _ := os.Pipe()
 				os.Stdin = rIn
-				wIn.WriteString(tt.stdin)
-				wIn.Close()
+				_, _ = wIn.WriteString(tt.stdin)
+				_ = wIn.Close()
 			}
-			
+
 			// Run the function
 			exitCode := run(tt.args)
-			
+
 			// Restore
-			w.Close()
-			wErr.Close()
+			_ = w.Close()
+			_ = wErr.Close()
 			os.Stdout = oldStdout
 			os.Stderr = oldStderr
 			os.Stdin = oldStdin
-			
+
 			// Read output
-			stdout.ReadFrom(r)
-			stderr.ReadFrom(rErr)
-			
+			_, _ = stdout.ReadFrom(r)
+			_, _ = stderr.ReadFrom(rErr)
+
 			// Check exit code
 			if exitCode != tt.wantExit {
 				t.Errorf("exit code = %d, want %d", exitCode, tt.wantExit)
 			}
-			
+
 			// Check stdout
 			if tt.wantOutput != "" && !strings.Contains(stdout.String(), tt.wantOutput) {
 				t.Errorf("stdout missing %q\nGot: %s", tt.wantOutput, stdout.String())
 			}
-			
+
 			// Check stderr
 			if tt.wantError != "" && !strings.Contains(stderr.String(), tt.wantError) {
 				t.Errorf("stderr missing %q\nGot: %s", tt.wantError, stderr.String())
@@ -144,17 +144,17 @@ func TestRun(t *testing.T) {
 // Test data setup
 func TestMain(m *testing.M) {
 	// Create test data directory
-	os.MkdirAll("testdata", 0755)
-	
+	_ = os.MkdirAll("testdata", 0755)
+
 	// Create simple test file
-	os.WriteFile("testdata/simple.sql", []byte("SELECT * FROM users;"), 0644)
-	
+	_ = os.WriteFile("testdata/simple.sql", []byte("SELECT * FROM users;"), 0644)
+
 	// Run tests
 	code := m.Run()
-	
+
 	// Cleanup
-	os.RemoveAll("testdata")
-	
+	_ = os.RemoveAll("testdata")
+
 	os.Exit(code)
 }
 
@@ -163,7 +163,7 @@ func TestAcceptance(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping acceptance test in short mode")
 	}
-	
+
 	// This would test the built binary
 	// For now, we skip this as it's optional
 }

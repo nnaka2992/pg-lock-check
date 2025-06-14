@@ -60,11 +60,11 @@ const (
 
 // Result represents the analysis result of a SQL statement
 type Result struct {
-	Severity      Severity
-	operation     string
-	lockType      LockType
-	tableLocks    []string
-	message       string
+	Severity   Severity
+	operation  string
+	lockType   LockType
+	tableLocks []string
+	message    string
 }
 
 // Operation returns the operation type

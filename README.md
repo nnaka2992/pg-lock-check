@@ -1,5 +1,7 @@
 # pg-lock-check
 
+[![CI](https://github.com/nnaka2992/pg-lock-check/actions/workflows/ci.yml/badge.svg)](https://github.com/nnaka2992/pg-lock-check/actions/workflows/ci.yml)
+
 A PostgreSQL lock analyzer that examines SQL statements for potential locking issues and provides severity-based warnings about operations that could cause database locks or blocking.
 
 ## Overview
