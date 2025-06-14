@@ -9,7 +9,26 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          check-latest: true
+      
+      - name: Run tests
+        run: go test -v ./...
+      
+      - name: Run go vet
+        run: go vet ./...
+
   goreleaser:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -23,29 +42,11 @@ jobs:
           go-version-file: 'go.mod'
           check-latest: true
       
-      - name: Set up Zig
-        uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.14.1
-      
-      - name: Set up macOS SDK for cross-compilation
-        run: |
-          # Download macOS SDK outside of workspace to avoid dirty git state
-          pushd /tmp
-          curl -L https://github.com/joseluisq/macosx-sdks/releases/download/14.0/MacOSX14.0.sdk.tar.xz -o MacOSX14.0.sdk.tar.xz
-          tar -xf MacOSX14.0.sdk.tar.xz
-          sudo mv MacOSX14.0.sdk /opt/
-          rm MacOSX14.0.sdk.tar.xz
-          popd
-          # Set SDK_PATH for GoReleaser
-          echo "SDK_PATH=/opt/MacOSX14.0.sdk" >> $GITHUB_ENV
-      
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
-          version: v2.10.2
+          version: "~2.10"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SDK_PATH: ${{ env.SDK_PATH }}
