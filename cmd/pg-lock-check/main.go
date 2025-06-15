@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"github.com/nnaka2992/pg-lock-check/internal/analyzer"
 	"github.com/nnaka2992/pg-lock-check/internal/parser"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 var (
@@ -22,6 +24,32 @@ var (
 	quietFlag         bool
 	verboseFlag       bool
 )
+
+// Output structures for JSON/YAML
+type Output struct {
+	Summary OutputSummary  `json:"summary" yaml:"summary"`
+	Results []OutputResult `json:"results" yaml:"results"`
+}
+
+type OutputSummary struct {
+	TotalStatements int            `json:"total_statements" yaml:"total_statements"`
+	BySeverity      map[string]int `json:"by_severity" yaml:"by_severity"`
+}
+
+type OutputResult struct {
+	Index      int         `json:"index" yaml:"index"`
+	SQL        string      `json:"sql" yaml:"sql"`
+	LineNumber int         `json:"line_number" yaml:"line_number"`
+	Severity   string      `json:"severity" yaml:"severity"`
+	Operation  string      `json:"operation" yaml:"operation"`
+	LockType   string      `json:"lock_type" yaml:"lock_type"`
+	Tables     []TableLock `json:"tables" yaml:"tables"`
+}
+
+type TableLock struct {
+	Name     string `json:"name" yaml:"name"`
+	LockType string `json:"lock_type" yaml:"lock_type"`
+}
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -127,7 +155,19 @@ func runAnalysis(cmd *cobra.Command, args []string) error {
 	// Output
 	switch outputFormat {
 	case "json":
-		fmt.Println(`{"results": []}`) // TODO: Implement
+		output := buildOutput(parsed, results)
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(output); err != nil {
+			return fmt.Errorf("encoding JSON: %w", err)
+		}
+	case "yaml":
+		output := buildOutput(parsed, results)
+		encoder := yaml.NewEncoder(os.Stdout)
+		encoder.SetIndent(2)
+		if err := encoder.Encode(output); err != nil {
+			return fmt.Errorf("encoding YAML: %w", err)
+		}
 	default:
 		// Text output
 		for i, result := range results {
@@ -159,5 +199,67 @@ func getSeverityName(s analyzer.Severity) string {
 		return "INFO"
 	default:
 		return "UNKNOWN"
+	}
+}
+
+func buildOutput(parsed *parser.ParseResult, results []*analyzer.Result) Output {
+	// Initialize severity counts
+	severityCounts := map[string]int{
+		"ERROR":    0,
+		"CRITICAL": 0,
+		"WARNING":  0,
+		"INFO":     0,
+	}
+
+	// Build results and count severities
+	outputResults := make([]OutputResult, len(results))
+	for i, result := range results {
+		severityName := getSeverityName(result.Severity)
+		severityCounts[severityName]++
+
+		// Get SQL statement and line number
+		sql := ""
+		lineNumber := 1
+		if i < len(parsed.Statements) {
+			sql = parsed.Statements[i].SQL
+			lineNumber = parsed.Statements[i].LineNumber
+		}
+
+		// Build tables array
+		tables := []TableLock{}
+		for _, tableLock := range result.TableLocks() {
+			// Parse table lock format "table_name:lock_type"
+			parts := strings.Split(tableLock, ":")
+			if len(parts) == 2 {
+				tables = append(tables, TableLock{
+					Name:     strings.TrimSpace(parts[0]),
+					LockType: strings.TrimSpace(parts[1]),
+				})
+			}
+		}
+
+		// Handle empty lock type for ERROR severity
+		lockType := string(result.LockType())
+		if result.Severity == analyzer.SeverityError {
+			lockType = ""
+		}
+
+		outputResults[i] = OutputResult{
+			Index:      i,
+			SQL:        sql,
+			LineNumber: lineNumber,
+			Severity:   severityName,
+			Operation:  result.Operation(),
+			LockType:   lockType,
+			Tables:     tables,
+		}
+	}
+
+	return Output{
+		Summary: OutputSummary{
+			TotalStatements: len(results),
+			BySeverity:      severityCounts,
+		},
+		Results: outputResults,
 	}
 }

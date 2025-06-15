@@ -18,7 +18,7 @@
 go.work
 
 # Built binary
-pg-lock-check
+/pg-lock-check
 
 # IDE files
 .idea/
