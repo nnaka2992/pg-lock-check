@@ -1,0 +1,38 @@
+name: Generate Documentation
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'internal/suggester/suggestions.yaml'
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Install yq
+      run: |
+        sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+        sudo chmod +x /usr/local/bin/yq
+    
+    - name: Generate documentation
+      run: |
+        chmod +x scripts/generate-suggestions-doc.sh
+        ./scripts/generate-suggestions-doc.sh
+    
+    - name: Commit changes
+      run: |
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git add docs/design/suggestions.md
+        git diff --staged --quiet || git commit -m "docs: auto-generate suggestions documentation [skip ci]"
+        git push
