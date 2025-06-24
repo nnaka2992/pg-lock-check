@@ -293,11 +293,7 @@ func (e *tableExtractor) extractFromRangeVar(rv *pg_query.RangeVar) {
 		return
 	}
 
-	tableName := rv.Relname
-	if rv.Schemaname != "" {
-		tableName = rv.Schemaname + "." + rv.Relname
-	}
-
+	tableName := getQualifiedTableName(rv)
 	if tableName != "" {
 		e.tables[tableName] = true
 	}
@@ -474,27 +470,27 @@ func (e *tableExtractor) extractFromDropStmt(stmt *pg_query.DropStmt) {
 					pg_query.ObjectType_OBJECT_POLICY:
 					// For TRIGGER/RULE/POLICY: first item is table name, second is object name
 					if len(parts) >= 1 {
-						objName = parts[0] // Table name is first
+						objName = quoteIdentifier(parts[0]) // Table name is first
 					}
 				case pg_query.ObjectType_OBJECT_INDEX:
 					// For INDEX: treat the index name as the object being locked
 					if len(parts) == 1 {
-						objName = parts[0]
+						objName = quoteIdentifier(parts[0])
 					} else if len(parts) >= 2 {
 						// Schema.index
-						objName = parts[0] + "." + parts[1]
+						objName = quoteQualifiedIdentifier(parts[0], parts[1])
 					}
 				default:
 					// For other object types (TABLE, VIEW, etc.)
 					if len(parts) == 1 {
 						// Simple object name
-						objName = parts[0]
+						objName = quoteIdentifier(parts[0])
 					} else if len(parts) == 2 {
 						// Schema.object
-						objName = parts[0] + "." + parts[1]
+						objName = quoteQualifiedIdentifier(parts[0], parts[1])
 					} else if len(parts) > 2 {
 						// Could be database.schema.object, but usually just schema.object
-						objName = parts[len(parts)-2] + "." + parts[len(parts)-1]
+						objName = quoteQualifiedIdentifier(parts[len(parts)-2], parts[len(parts)-1])
 					}
 				}
 
@@ -838,10 +834,5 @@ func getQualifiedTableName(rv *pg_query.RangeVar) string {
 		return ""
 	}
 
-	tableName := rv.Relname
-	if rv.Schemaname != "" {
-		tableName = rv.Schemaname + "." + rv.Relname
-	}
-
-	return tableName
+	return quoteQualifiedIdentifier(rv.Schemaname, rv.Relname)
 }

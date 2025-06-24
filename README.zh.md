@@ -13,7 +13,7 @@
 
 **在危险的 PostgreSQL 迁移导致生产环境宕机之前捕获它们** 🚨
 
-![pg-lock-check demo](docs/assets/demo.gif)
+![pg-lock-check demo](docs/sample/demo.gif)
 
 [**快速开始**](#-快速开始) • [**为什么需要它**](#-为什么需要它) • [**安装**](#-安装) • [**使用方法**](#-使用方法) • [**CI/CD 集成**](#-cicd-集成)
 
@@ -30,11 +30,28 @@ go install github.com/nnaka2992/pg-lock-check/cmd/pg-lock-check@latest
 # 捕获危险的迁移
 $ pg-lock-check "UPDATE users SET active = false"
 [CRITICAL] UPDATE users SET active = false
+Suggestion for safe migration:
+  Step: Export target row IDs to file
+    Can run in transaction: Yes
+    SQL:
+      \COPY (SELECT id FROM users ORDER BY id) TO '/path/to/target_ids.csv' CSV
+  Step: Process file in batches with progress tracking
+    Can run in transaction: No
+    Instructions:
+      1. Read ID file in chunks (e.g., 1000-5000 rows)
+      2. For each chunk:
+         - Build explicit ID list
+         - Execute UPDATE users SET active = false WHERE id IN (chunk_ids)
+         - Commit transaction
+         - Log progress (line number or ID range)
+         - Sleep 100-500ms between batches
+         - Monitor replication lag
+      3. Handle failures with resume capability
 
 Summary: 1 statements analyzed
 
 # 检查迁移文件
-$ pg-lock-check -f migrations/*.sql
+$ pg-lock-check -f migration.sql
 ```
 
 ## 💡 为什么需要它
@@ -58,9 +75,10 @@ UPDATE users SET last_login = NOW();
 
 - 🧠 **智能分析** - 知道有 WHERE 和没有 WHERE 的 `UPDATE` 之间的区别
 - 🎭 **事务上下文** - `CREATE INDEX CONCURRENTLY` 只在事务外工作
+- 💡 **安全迁移建议** - 为危险操作提供可执行的替代方案
 - 📊 **多种输出格式** - 人类可读格式、工具用的 JSON、YAML
 - 🚪 **有意义的退出码** - 完美适配 CI/CD 流水线
-- 📁 **批量分析** - 一次检查整个迁移目录
+- 📁 **文件分析** - 直接检查 SQL 文件
 - ⚡ **闪电般快速** - 不会拖慢你的 CI/CD 流水线
 
 ## 📦 安装
@@ -99,6 +117,23 @@ go build -o pg-lock-check ./cmd/pg-lock-check
 # 这个看起来无害的查询...
 $ pg-lock-check "UPDATE users SET preferences = '{}'"
 [CRITICAL] UPDATE users SET preferences = '{}'
+Suggestion for safe migration:
+  Step: Export target row IDs to file
+    Can run in transaction: Yes
+    SQL:
+      \COPY (SELECT id FROM users ORDER BY id) TO '/path/to/target_ids.csv' CSV
+  Step: Process file in batches with progress tracking
+    Can run in transaction: No
+    Instructions:
+      1. Read ID file in chunks (e.g., 1000-5000 rows)
+      2. For each chunk:
+         - Build explicit ID list
+         - Execute UPDATE users SET preferences = '{}' WHERE id IN (chunk_ids)
+         - Commit transaction
+         - Log progress (line number or ID range)
+         - Sleep 100-500ms between batches
+         - Monitor replication lag
+      3. Handle failures with resume capability
 
 Summary: 1 statements analyzed
 ```
@@ -113,6 +148,18 @@ Summary: 1 statements analyzed
 ```
 
 ### 🔧 常见场景
+
+<details>
+<summary><b>检查迁移文件</b></summary>
+
+```bash
+# 单个文件
+pg-lock-check -f migrations/20240114_add_index.sql
+
+# 从 CI/CD 流水线
+pg-lock-check -f migration.sql || exit 1
+```
+</details>
 
 <details>
 <summary><b>处理 CREATE INDEX CONCURRENTLY</b></summary>
@@ -131,6 +178,46 @@ $ pg-lock-check --no-transaction "CREATE INDEX CONCURRENTLY idx_users_email ON u
 Summary: 1 statements analyzed
 ```
 </details>
+
+<details>
+<summary><b>工具用 JSON 输出</b></summary>
+
+```bash
+pg-lock-check -o json "TRUNCATE users" | jq '.severity'
+# "CRITICAL"
+
+# 在脚本中使用
+SEVERITY=$(pg-lock-check -o json "$SQL" | jq -r '.results[0].severity')
+if [ "$SEVERITY" = "CRITICAL" ]; then
+  echo "🚨 危险！不要在生产环境运行！"
+  exit 1
+fi
+```
+</details>
+
+## 💡 安全迁移建议
+
+pg-lock-check 不仅仅是警告您 - 它还会展示如何修复危险操作！获取避免长时间锁定的逐步迁移模式。
+
+- ✅ **18 个 CRITICAL 操作**有安全替代方案
+- 🎯 **智能建议**：批处理、CONCURRENTLY 操作等
+- 📊 **事务安全指示器**：每个步骤的指示
+
+参见[安全迁移模式](docs/design/suggestions.md)了解所有可用建议。
+
+### 快速示例
+
+```bash
+$ pg-lock-check "CREATE INDEX idx_users_email ON users(email)"
+[CRITICAL] CREATE INDEX idx_users_email ON users(email)
+Suggestion for safe migration:
+  Step: Use `CREATE INDEX CONCURRENTLY` outside transaction
+    Can run in transaction: No
+    SQL:
+      CREATE INDEX CONCURRENTLY idx_users_email ON users (email);
+```
+
+使用 `--no-suggestion` 标志禁用建议。
 
 ## 🚦 严重级别
 
@@ -163,16 +250,53 @@ jobs:
       - run: go install github.com/nnaka2992/pg-lock-check/cmd/pg-lock-check@latest
       - name: Check for dangerous locks
         run: |
-          pg-lock-check -f migrations/*.sql -o json | \
+          pg-lock-check -f migration.sql -o json | \
           jq -e '.results[] | select(.severity == "CRITICAL" or .severity == "ERROR")' && \
           echo "🚨 Dangerous operations detected!" && exit 1 || \
           echo "✅ Migrations look safe!"
 ```
 
+### Pre-commit Hook
+```bash
+#!/bin/bash
+# .git/hooks/pre-commit
+files=$(git diff --cached --name-only --diff-filter=ACM | grep '\.sql$')
+if [ -n "$files" ]; then
+    echo "🔍 检查 SQL 文件的锁定问题..."
+    pg-lock-check -f $files || exit 1
+fi
+```
+
+## 🛠️ 开发
+
+```bash
+# 克隆和测试
+git clone https://github.com/nnaka2992/pg-lock-check.git
+cd pg-lock-check
+go test ./...
+
+# 构建
+go build -o pg-lock-check ./cmd/pg-lock-check
+```
+
+## 🏗️ 架构
+
+- **Parser**: 封装 `pg_query_go` 用于 PostgreSQL AST 解析
+- **Analyzer**: 将 229 种操作映射到锁严重级别
+- **Suggester**: 为 CRITICAL 操作提供安全迁移模式
+- **Metadata**: 提取 SQL 元数据用于建议生成
+- **CLI**: 具有多种输出格式的清洁接口
+
+## 🤝 贡献
+
+发现 bug？需要新功能？欢迎 PR！
+
 ## 🔮 未来计划
 
-- **真实世界严重性**: 基于实际生产影响而非仅仅锁类型的严重性
-- **安全迁移建议**: 自动为危险操作建议更安全的替代方案
+- **增强 CLI 输出**: 添加详细的锁信息和影响描述
+- **并行分析**: 同时分析多个文件以加快 CI/CD
+- **自定义规则**: 为特定操作定义自己的严重级别
+- **长事务处理**: 一些 WARNING 级别操作在长时间运行的事务中可能升级为 CRITICAL
 
 ## 许可证
 

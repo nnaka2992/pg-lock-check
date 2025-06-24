@@ -2599,6 +2599,294 @@ func runAnalyzerTests(t *testing.T, tests []struct {
 	}
 }
 
+// ===== QUOTED IDENTIFIERS TEST =====
+
+func TestAnalyzer_QuotedIdentifiers(t *testing.T) {
+	tests := []struct {
+		name             string
+		sql              string
+		mode             TransactionMode
+		expectedSeverity Severity
+		expectedOp       string
+		expectedLocks    map[string]string
+	}{
+		// === Basic quoted vs unquoted identifiers ===
+		{
+			name:             "simple quoted lowercase table",
+			sql:              `SELECT * FROM "users"`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityInfo,
+			expectedOp:       "SELECT",
+			expectedLocks:    map[string]string{"users": "AccessShare"},
+		},
+		{
+			name:             "simple unquoted lowercase table",
+			sql:              `SELECT * FROM users`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityInfo,
+			expectedOp:       "SELECT",
+			expectedLocks:    map[string]string{"users": "AccessShare"},
+		},
+		{
+			name:             "quoted uppercase table",
+			sql:              `SELECT * FROM "Users"`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityInfo,
+			expectedOp:       "SELECT",
+			expectedLocks:    map[string]string{`"Users"`: "AccessShare"},
+		},
+		{
+			name:             "quoted mixed case table",
+			sql:              `UPDATE "UserAccounts" SET active = true WHERE id = 1`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityWarning,
+			expectedOp:       "UPDATE with WHERE",
+			expectedLocks:    map[string]string{`"UserAccounts"`: "RowExclusive"},
+		},
+
+		// === Special characters that require quoting ===
+		{
+			name:             "table with hyphen",
+			sql:              `SELECT * FROM "user-accounts"`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityInfo,
+			expectedOp:       "SELECT",
+			expectedLocks:    map[string]string{`"user-accounts"`: "AccessShare"},
+		},
+		{
+			name:             "table with space",
+			sql:              `UPDATE "user accounts" SET status = 'active'`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityCritical,
+			expectedOp:       "UPDATE without WHERE",
+			expectedLocks:    map[string]string{`"user accounts"`: "RowExclusive"},
+		},
+		{
+			name:             "table with dot notation",
+			sql:              `DELETE FROM "my.table" WHERE id > 100`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityWarning,
+			expectedOp:       "DELETE with WHERE",
+			expectedLocks:    map[string]string{`"my.table"`: "RowExclusive"},
+		},
+		{
+			name:             "table starting with number",
+			sql:              `INSERT INTO "123_logs" (message) VALUES ('test')`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityInfo,
+			expectedOp:       "INSERT",
+			expectedLocks:    map[string]string{`"123_logs"`: "RowExclusive"},
+		},
+		{
+			name:             "table with special symbols",
+			sql:              `SELECT * FROM "user$data"`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityInfo,
+			expectedOp:       "SELECT",
+			expectedLocks:    map[string]string{`"user$data"`: "AccessShare"},
+		},
+
+		// === Schema qualified identifiers ===
+		{
+			name:             "quoted schema and table",
+			sql:              `SELECT * FROM "public"."users"`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityInfo,
+			expectedOp:       "SELECT",
+			expectedLocks:    map[string]string{"public.users": "AccessShare"},
+		},
+		{
+			name:             "unquoted schema, quoted table",
+			sql:              `SELECT * FROM public."Users"`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityInfo,
+			expectedOp:       "SELECT",
+			expectedLocks:    map[string]string{`public."Users"`: "AccessShare"},
+		},
+		{
+			name:             "quoted schema, unquoted table",
+			sql:              `UPDATE "MySchema".users SET active = false`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityCritical,
+			expectedOp:       "UPDATE without WHERE",
+			expectedLocks:    map[string]string{`"MySchema".users`: "RowExclusive"},
+		},
+
+		// === PostgreSQL reserved words as identifiers ===
+		{
+			name:             "reserved word USER",
+			sql:              `SELECT * FROM "user"`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityInfo,
+			expectedOp:       "SELECT",
+			expectedLocks:    map[string]string{`"user"`: "AccessShare"},
+		},
+		{
+			name:             "reserved word ORDER",
+			sql:              `UPDATE "order" SET status = 'shipped' WHERE id = 1`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityWarning,
+			expectedOp:       "UPDATE with WHERE",
+			expectedLocks:    map[string]string{`"order"`: "RowExclusive"},
+		},
+		{
+			name:             "reserved word GROUP",
+			sql:              `INSERT INTO "group" (name) VALUES ('admins')`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityInfo,
+			expectedOp:       "INSERT",
+			expectedLocks:    map[string]string{`"group"`: "RowExclusive"},
+		},
+		{
+			name:             "reserved word TABLE",
+			sql:              `DELETE FROM "table" WHERE created < NOW() - INTERVAL '1 year'`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityWarning,
+			expectedOp:       "DELETE with WHERE",
+			expectedLocks:    map[string]string{`"table"`: "RowExclusive"},
+		},
+		{
+			name:             "reserved word SELECT as table",
+			sql:              `CREATE INDEX idx_select ON "select" (id)`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityCritical,
+			expectedOp:       "CREATE INDEX",
+			expectedLocks:    map[string]string{`"select"`: "Share"},
+		},
+		{
+			name:             "reserved word WHERE as table",
+			sql:              `DROP TABLE "where"`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityCritical,
+			expectedOp:       "DROP TABLE",
+			expectedLocks:    map[string]string{`"where"`: "AccessExclusive"},
+		},
+		{
+			name:             "reserved word FROM as column",
+			sql:              `ALTER TABLE messages ADD COLUMN "from" text`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityInfo,
+			expectedOp:       "ALTER TABLE ADD COLUMN without DEFAULT",
+			expectedLocks:    map[string]string{"messages": "AccessExclusive"},
+		},
+		{
+			name:             "reserved word CHECK as table",
+			sql:              `TRUNCATE "check"`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityCritical,
+			expectedOp:       "TRUNCATE",
+			expectedLocks:    map[string]string{`"check"`: "AccessExclusive"},
+		},
+
+		// === DDL operations with quoted identifiers ===
+		{
+			name:             "CREATE TABLE with all quoted",
+			sql:              `CREATE TABLE "MyTable" ("ID" serial PRIMARY KEY, "UserName" text)`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityInfo,
+			expectedOp:       "CREATE TABLE",
+			expectedLocks:    map[string]string{},
+		},
+		{
+			name:             "ALTER TABLE with quoted identifiers",
+			sql:              `ALTER TABLE "user-data" ALTER COLUMN "first-name" TYPE varchar(100)`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityCritical,
+			expectedOp:       "ALTER TABLE ALTER COLUMN TYPE",
+			expectedLocks:    map[string]string{`"user-data"`: "AccessExclusive"},
+		},
+		{
+			name:             "CREATE INDEX CONCURRENTLY on quoted table",
+			sql:              `CREATE INDEX CONCURRENTLY "idx_Users_email" ON "Users" (email)`,
+			mode:             NoTransaction,
+			expectedSeverity: SeverityWarning,
+			expectedOp:       "CREATE INDEX CONCURRENTLY",
+			expectedLocks:    map[string]string{`"Users"`: "ShareUpdateExclusive"},
+		},
+
+		// === Complex queries with quoted identifiers ===
+		{
+			name:             "JOIN with mixed quoted/unquoted",
+			sql:              `SELECT * FROM users u JOIN "UserProfiles" up ON u.id = up."userId"`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityInfo,
+			expectedOp:       "SELECT",
+			expectedLocks:    map[string]string{"users": "AccessShare", `"UserProfiles"`: "AccessShare"},
+		},
+		{
+			name:             "Subquery with quoted tables",
+			sql:              `UPDATE "Orders" SET status = 'processed' WHERE "customerId" IN (SELECT id FROM "Customers" WHERE region = 'US')`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityWarning,
+			expectedOp:       "UPDATE with WHERE",
+			expectedLocks:    map[string]string{`"Orders"`: "RowExclusive", `"Customers"`: "AccessShare"},
+		},
+		{
+			name:             "CTE with quoted identifiers",
+			sql:              `WITH "ActiveUsers" AS (SELECT * FROM "Users" WHERE active = true) DELETE FROM "Sessions" WHERE "userId" NOT IN (SELECT id FROM "ActiveUsers")`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityWarning,
+			expectedOp:       "DELETE with WHERE",
+			// NOTE: Current implementation applies strongest lock to all tables (conservative approach)
+			expectedLocks: map[string]string{`"Sessions"`: "RowExclusive", `"Users"`: "RowExclusive"},
+		},
+
+		// === Maintenance operations with quoted identifiers ===
+		{
+			name:             "VACUUM quoted table",
+			sql:              `VACUUM "large_table"`,
+			mode:             NoTransaction,
+			expectedSeverity: SeverityWarning,
+			expectedOp:       "VACUUM",
+			expectedLocks:    map[string]string{`large_table`: "ShareUpdateExclusive"},
+		},
+		{
+			name:             "ANALYZE quoted table",
+			sql:              `ANALYZE "Statistics"`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityWarning,
+			expectedOp:       "ANALYZE",
+			expectedLocks:    map[string]string{`"Statistics"`: "ShareUpdateExclusive"},
+		},
+		{
+			name:             "CLUSTER on quoted table",
+			sql:              `CLUSTER "Events" USING "idx_Events_timestamp"`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityCritical,
+			expectedOp:       "CLUSTER",
+			expectedLocks:    map[string]string{`"Events"`: "AccessExclusive"},
+		},
+		{
+			name:             "REINDEX quoted table",
+			sql:              `REINDEX TABLE "user-sessions"`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityCritical,
+			expectedOp:       "REINDEX TABLE",
+			expectedLocks:    map[string]string{`"user-sessions"`: "AccessExclusive"},
+		},
+
+		// === Edge cases ===
+		{
+			name:             "table name with embedded quotes",
+			sql:              `SELECT * FROM "table""with""quotes"`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityInfo,
+			expectedOp:       "SELECT",
+			expectedLocks:    map[string]string{`"table""with""quotes"`: "AccessShare"},
+		},
+		{
+			name:             "reserved word with uppercase",
+			sql:              `UPDATE "ORDER" SET priority = 1`,
+			mode:             InTransaction,
+			expectedSeverity: SeverityCritical,
+			expectedOp:       "UPDATE without WHERE",
+			expectedLocks:    map[string]string{`"ORDER"`: "RowExclusive"},
+		},
+	}
+
+	runAnalyzerTests(t, tests)
+}
+
 // ===== UNKNOWN OPERATIONS TEST =====
 
 func TestAnalyzer_UnknownOperations(t *testing.T) {

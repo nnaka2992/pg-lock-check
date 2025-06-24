@@ -1,0 +1,489 @@
+# CRITICAL Operations - Safe Migration Patterns
+# Generated from docs/design/critical_operations_suggestions.md
+version: "1.0"
+
+metadata:
+  title: "CRITICAL Operations - Suggestion Mapping"
+  description: "Based on lock_severity.md, this document maps all CRITICAL severity operations to their safe migration suggestions."
+  
+prerequisites:
+  - "PostgreSQL 13+ (minimum supported version)"
+  - "All CONCURRENTLY operations must run outside transactions"
+  - "Set `lock_timeout` before DDL operations: `SET lock_timeout = '5s';`"
+
+guidelines:
+  general:
+    - "All CONCURRENTLY operations **must** run outside transactions (will ERROR in transaction mode)"
+    - "Always set `lock_timeout` for DDL operations: `SET lock_timeout = '5s';`"
+    - "Monitor locks during migration: `SELECT * FROM pg_stat_activity WHERE wait_event_type = 'Lock';`"
+  
+  batching:
+    - "**Common pattern**: `SELECT id FROM table WHERE condition \\COPY TO '/tmp/ids.csv'` → Process file in script"
+    - "Default batch size: 1000-5000 rows (use `WHERE id IN (...)` with explicit lists)"
+    - "Add sleep delays (100-500ms) between batches"
+    - "Track progress: Line number in file or separate progress table"
+    - "Monitor: Replication lag, lock waits, transaction duration"
+    - "Resume capability: Essential for large tables (millions of rows)"
+
+version_features:
+  title: "Version Features Available in PostgreSQL 13+"
+  items:
+    - "CREATE/DROP INDEX CONCURRENTLY"
+    - "REFRESH MATERIALIZED VIEW CONCURRENTLY"
+    - "REINDEX CONCURRENTLY"
+    - "ALTER TABLE ... ADD CONSTRAINT ... NOT VALID"
+    - "Generated columns"
+    - "Partitioned table improvements"
+
+risk_assessment:
+  - pattern: "Batched DML"
+    risk_level: "Low"
+    performance_impact: "2-5x slower"
+    best_for: "Tables > 1M rows"
+  - pattern: "CONCURRENTLY operations"
+    risk_level: "Low"
+    performance_impact: "2-3x slower"
+    best_for: "Production systems"
+  - pattern: "Blue-green migrations"
+    risk_level: "Low"
+    performance_impact: "Requires 2x storage"
+    best_for: "Complex type changes"
+  - pattern: "NOT VALID + VALIDATE"
+    risk_level: "Low"
+    performance_impact: "Minimal"
+    best_for: "Large tables"
+  - pattern: "pg_repack"
+    risk_level: "Medium"
+    performance_impact: "CPU intensive"
+    best_for: "Bloated tables"
+
+connection_pooler_considerations:
+  - "PgBouncer transaction mode: CONCURRENTLY operations need direct database connections"
+  - "Consider connection limits when batching"
+  - "May need to disable prepared statements for some DDL operations"
+
+# Operations with safe alternatives
+operations_with_alternatives:
+  # DML Operations
+  - operation: "UPDATE without WHERE"
+    category: "DML Operations"
+    steps:
+      - description: "Export target row IDs to file"
+        can_run_in_transaction: true
+        type: sql
+        sql_template: |
+          \COPY (SELECT {{or .idColumn "id"}} FROM {{.tableName}} ORDER BY {{or .idColumn "id"}}) TO '/path/to/target_ids.csv' CSV
+        
+      - description: "Process file in batches with progress tracking"
+        can_run_in_transaction: false
+        type: procedural
+        notes: |
+          1. Read ID file in chunks (e.g., 1000-5000 rows)
+          2. For each chunk:
+             - Build explicit ID list
+             - Execute UPDATE {{.tableName}} SET {{.columnsValues}} WHERE {{or .idColumn "id"}} IN (chunk_ids)
+             - Commit transaction
+             - Log progress (line number or ID range)
+             - Sleep 100-500ms between batches
+             - Monitor replication lag
+          3. Handle failures with resume capability
+
+  - operation: "DELETE without WHERE"
+    category: "DML Operations"
+    steps:
+      - description: "Export target row IDs to file"
+        can_run_in_transaction: true
+        type: sql
+        sql_template: |
+          \COPY (SELECT {{or .idColumn "id"}} FROM {{.tableName}} ORDER BY {{or .idColumn "id"}}) TO '/path/to/target_ids.csv' CSV
+        
+      - description: "Process file in batches"
+        can_run_in_transaction: false
+        type: procedural
+        notes: |
+          1. Read ID file in chunks (e.g., 1000-5000 rows)
+          2. For each chunk:
+             - Build explicit ID list
+             - Execute DELETE FROM {{.tableName}} WHERE {{or .idColumn "id"}} IN (chunk_ids)
+             - Commit transaction
+             - Log progress (line number or ID range)
+             - Sleep 100-500ms between batches
+             - Monitor lock waits
+          3. Handle failures with resume capability
+
+  - operation: "MERGE without WHERE"
+    category: "DML Operations"
+    steps:
+      - description: "Export source data IDs to file"
+        can_run_in_transaction: true
+        type: sql
+        sql_template: |
+          \COPY (SELECT {{or .idColumn "id"}} FROM {{.sourceTable}} ORDER BY {{or .idColumn "id"}}) TO '/path/to/source_ids.csv' CSV
+        
+      - description: "Process MERGE in batches"
+        can_run_in_transaction: false
+        type: procedural
+        notes: |
+          1. Read ID file in chunks (e.g., 1000-5000 rows)
+          2. For each chunk:
+             - Build explicit ID list
+             - Execute MERGE with modified source:
+               MERGE INTO {{.targetTable}} 
+               USING (SELECT * FROM {{.sourceTable}} WHERE {{or .idColumn "id"}} IN (chunk_ids)) AS source
+               ON {{.mergeCondition}}
+               WHEN MATCHED THEN {{.matchedAction}}
+               WHEN NOT MATCHED THEN {{.notMatchedAction}}
+             - Commit transaction
+             - Log progress (chunk number, rows affected)
+             - Sleep 100-500ms between batches
+             - Monitor for lock conflicts
+          3. Verify merge completion with counts
+
+  # Index Operations
+  - operation: "DROP INDEX"
+    category: "Index Operations"
+    steps:
+      - description: "Use `DROP INDEX CONCURRENTLY` outside transaction"
+        can_run_in_transaction: false
+        type: sql
+        sql_template: |
+          DROP INDEX CONCURRENTLY {{.indexName}};
+
+  - operation: "CREATE INDEX"
+    category: "Index Operations"
+    steps:
+      - description: "Use `CREATE INDEX CONCURRENTLY` outside transaction"
+        can_run_in_transaction: false
+        type: sql
+        sql_template: |
+          CREATE INDEX CONCURRENTLY {{or .indexName (printf "idx_%s_%s" .tableName (join .columns "_"))}} ON {{.tableName}} ({{join .columns ", "}});
+
+  - operation: "CREATE UNIQUE INDEX"
+    category: "Index Operations"
+    steps:
+      - description: "Use `CREATE UNIQUE INDEX CONCURRENTLY` outside transaction"
+        can_run_in_transaction: false
+        type: sql
+        sql_template: |
+          CREATE UNIQUE INDEX CONCURRENTLY {{or .indexName (printf "uniq_%s_%s" .tableName (join .columns "_"))}} ON {{.tableName}} ({{join .columns ", "}});
+
+  - operation: "REINDEX"
+    category: "Index Operations"
+    steps:
+      - description: "Use `REINDEX CONCURRENTLY` or CREATE new index + DROP old pattern"
+        can_run_in_transaction: false
+        type: sql
+        sql_template: |
+          REINDEX INDEX CONCURRENTLY {{.indexName}};
+
+  - operation: "REINDEX TABLE"
+    category: "Index Operations"
+    steps:
+      - description: "Export all index names for the table"
+        can_run_in_transaction: true
+        type: sql
+        sql_template: |
+          \COPY (SELECT indexname FROM pg_indexes WHERE tablename = '{{.tableName}}' ORDER BY indexname) TO '/path/to/table_indexes.csv' CSV
+      
+      - description: "Reindex each index individually"
+        can_run_in_transaction: false
+        type: procedural
+        notes: |
+          For each index from the exported file:
+          - Execute: REINDEX INDEX CONCURRENTLY index_name;
+          - Monitor progress and locks
+          - Handle any errors (skip corrupted indexes, log failures)
+          - Sleep briefly between indexes to reduce load
+
+  - operation: "REINDEX DATABASE"
+    category: "Index Operations"
+    steps:
+      - description: "Export all index names in the database"
+        can_run_in_transaction: true
+        type: sql
+        sql_template: |
+          \COPY (SELECT schemaname || '.' || indexname FROM pg_indexes WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY schemaname, indexname) TO '/path/to/database_indexes.csv' CSV
+
+      - description: "Reindex each index individually"
+        can_run_in_transaction: false
+        type: procedural
+        notes: |
+          For each index from the exported file:
+          - Execute: REINDEX INDEX CONCURRENTLY schema.index_name;
+          - Monitor progress and locks
+          - Handle any errors (skip corrupted indexes, log failures)
+          - Sleep briefly between indexes to reduce load
+
+  - operation: "REINDEX SCHEMA"
+    category: "Index Operations"
+    steps:
+      - description: "Export all index names in the schema"
+        can_run_in_transaction: true
+        type: sql
+        sql_template: |
+          \COPY (SELECT indexname FROM pg_indexes WHERE schemaname = '{{.schema}}' ORDER BY indexname) TO '/path/to/schema_indexes.csv' CSV
+
+      - description: "Reindex each index individually"
+        can_run_in_transaction: false
+        type: procedural
+        notes: |
+          For each index from the exported file:
+          - Execute: REINDEX INDEX CONCURRENTLY schema.index_name;
+          - Monitor progress and locks
+          - Handle any errors (skip corrupted indexes, log failures)
+          - Sleep briefly between indexes to reduce load
+
+  # ALTER TABLE Operations
+  - operation: "ALTER TABLE ADD COLUMN with volatile DEFAULT"
+    category: "ALTER TABLE Operations"
+    steps:
+      - description: "`ADD COLUMN` without default"
+        can_run_in_transaction: true
+        type: sql
+        sql_template: |
+          ALTER TABLE {{.tableName}} ADD COLUMN {{.columnName}} {{.dataType}};
+
+      - description: "Batch update with default values (separate transactions per batch)"
+        can_run_in_transaction: false
+        type: procedural
+        notes: |
+          1. Identify rows with NULL values in the new column
+          2. Export row IDs that need updating (if needed)
+          3. For each batch of rows (e.g., 1000-5000):
+             - Build explicit ID list
+             - Execute UPDATE {{.tableName}} SET {{.columnName}} = {{.defaultValue}} WHERE {{or .idColumn "id"}} IN (id_list)
+             - Commit transaction
+             - Log progress
+             - Sleep 100-500ms between batches
+             - Monitor for lock conflicts
+          4. Verify all rows have been updated
+        
+      - description: "`ALTER COLUMN SET DEFAULT`"
+        can_run_in_transaction: true
+        type: sql
+        sql_template: |
+          ALTER TABLE {{.tableName}} ALTER COLUMN {{.columnName}} SET DEFAULT {{.defaultValue}};
+
+  - operation: "ALTER TABLE ALTER COLUMN TYPE"
+    category: "ALTER TABLE Operations"
+    steps:
+      - description: "Add new column"
+        can_run_in_transaction: true
+        type: sql
+        sql_template: |
+          ALTER TABLE {{.tableName}} ADD COLUMN {{.columnName}}_new {{.newType}};
+
+      - description: "Add sync trigger"
+        can_run_in_transaction: true
+        type: sql
+        sql_template: |
+          CREATE OR REPLACE FUNCTION sync_{{.tableName}}_{{.columnName}}() RETURNS TRIGGER AS $$
+          BEGIN
+            NEW.{{.columnName}}_new := NEW.{{.columnName}}::{{.newType}};
+            RETURN NEW;
+          END;
+          $$ LANGUAGE plpgsql;
+          
+          CREATE TRIGGER {{.tableName}}_{{.columnName}}_sync_trigger
+          BEFORE INSERT OR UPDATE ON {{.tableName}}
+          FOR EACH ROW EXECUTE FUNCTION sync_{{.tableName}}_{{.columnName}}();
+        notes: |
+          "Trigger to keep old and new columns in sync"
+        
+      - description: "Backfill script"
+        can_run_in_transaction: false
+        type: procedural
+        notes: |
+          "Batch update new column from old column"
+
+      - description: "Atomic swap"
+        can_run_in_transaction: true
+        type: sql
+        sql_template: |
+          BEGIN;
+          -- Set lock timeout to avoid long waits
+          SET LOCAL lock_timeout = '5s';
+          
+          -- Clean up sync trigger and function
+          DROP TRIGGER {{.tableName}}_{{.columnName}}_sync_trigger ON {{.tableName}};
+          DROP FUNCTION sync_{{.tableName}}_{{.columnName}}();
+          
+          -- Drop old column (fast, no table rewrite)
+          ALTER TABLE {{.tableName}} DROP COLUMN {{.columnName}};
+          
+          -- Rename new column to old name
+          ALTER TABLE {{.tableName}} RENAME COLUMN {{.columnName}}_new TO {{.columnName}};
+          COMMIT;
+        notes: |
+          "DROP COLUMN is fast (no table rewrite) but needs brief AccessExclusive lock"
+
+  - operation: "ALTER TABLE ADD PRIMARY KEY"
+    category: "ALTER TABLE Operations"
+    steps:
+      - description: "First `CREATE UNIQUE INDEX CONCURRENTLY`"
+        can_run_in_transaction: false
+        type: sql
+        sql_template: |
+          CREATE UNIQUE INDEX CONCURRENTLY {{or .indexName (printf "%s_pkey" .tableName)}} ON {{.tableName}} ({{join .columns ", "}});
+        
+      - description: "Then `ALTER TABLE ADD CONSTRAINT pkey PRIMARY KEY USING INDEX`"
+        can_run_in_transaction: true
+        type: sql
+        sql_template: |
+          ALTER TABLE {{.tableName}} ADD CONSTRAINT {{or .constraintName (printf "%s_pkey" .tableName)}} PRIMARY KEY USING INDEX {{or .indexName (printf "%s_pkey" .tableName)}};
+
+  - operation: "ALTER TABLE ADD CONSTRAINT CHECK"
+    category: "ALTER TABLE Operations"
+    steps:
+      - description: "Use `ADD CONSTRAINT NOT VALID`"
+        can_run_in_transaction: true
+        type: sql
+        sql_template: |
+          ALTER TABLE {{.tableName}} ADD CONSTRAINT {{.constraintName}} CHECK ({{.checkExpression}}) NOT VALID;
+
+      - description: "Then `VALIDATE CONSTRAINT`"
+        can_run_in_transaction: true
+        type: sql
+        sql_template: |
+          ALTER TABLE {{.tableName}} VALIDATE CONSTRAINT {{.constraintName}};
+        notes: |
+          "Can be run in separate transaction - may take time on large tables"
+
+  - operation: "ALTER TABLE SET NOT NULL"
+    category: "ALTER TABLE Operations"
+    steps:
+      - description: "`ADD CONSTRAINT CHECK (col IS NOT NULL) NOT VALID`"
+        can_run_in_transaction: true
+        type: sql
+        sql_template: |
+          ALTER TABLE {{.tableName}} ADD CONSTRAINT {{or .constraintName (printf "%s_%s_not_null" .tableName .column)}} CHECK ({{.column}} IS NOT NULL) NOT VALID;
+        
+      - description: "`VALIDATE CONSTRAINT`"
+        can_run_in_transaction: true
+        type: sql
+        sql_template: |
+          ALTER TABLE {{.tableName}} VALIDATE CONSTRAINT {{or .constraintName (printf "%s_%s_not_null" .tableName .column)}};
+        notes: |
+          "Run in separate transaction"
+        
+      - description: "`SET NOT NULL`"
+        can_run_in_transaction: true
+        type: sql
+        sql_template: |
+          ALTER TABLE {{.tableName}} ALTER COLUMN {{.column}} SET NOT NULL;
+        
+      - description: "Drop constraint"
+        can_run_in_transaction: true
+        type: sql
+        sql_template: |
+          ALTER TABLE {{.tableName}} DROP CONSTRAINT {{or .constraintName (printf "%s_%s_not_null" .tableName .column)}};
+
+  # Maintenance Operations
+  - operation: "CLUSTER"
+    category: "Maintenance Operations"
+    partial_alternative: true
+    steps:
+      - description: "Consider `pg_repack` extension for online reorganization"
+        can_run_in_transaction: false
+        type: external
+        command_template: |
+          pg_repack -t {{.tableName}} -i {{.indexName}} -d <YOUR_DATABASE>
+
+  - operation: "REFRESH MATERIALIZED VIEW"
+    category: "Maintenance Operations"
+    steps:
+      - description: "Use `REFRESH MATERIALIZED VIEW CONCURRENTLY` (requires unique index)"
+        can_run_in_transaction: false
+        type: sql
+        sql_template: |
+          REFRESH MATERIALIZED VIEW CONCURRENTLY {{.viewName}};
+
+  - operation: "VACUUM FULL"
+    category: "Maintenance Operations"
+    steps:
+      - description: "Use `pg_repack` extension instead"
+        can_run_in_transaction: false
+        type: external
+        command_template: |
+          pg_repack -n -t {{.tableName}} -d <YOUR_DATABASE>
+
+# Operations without safe alternatives
+operations_without_alternatives:
+  - operation: "TRUNCATE"
+    category: "DML Operations"
+    reason: "Requires AccessExclusive lock, no workaround"
+    
+  - operation: "DROP TABLE"
+    category: "DDL Operations"
+    reason: "Destructive operation"
+    
+  - operation: "DROP SCHEMA"
+    category: "DDL Operations"
+    reason: "Destructive operation"
+    
+  - operation: "DROP SCHEMA CASCADE"
+    category: "DDL Operations"
+    reason: "Destructive operation"
+    
+  - operation: "DROP OWNED"
+    category: "DDL Operations"
+    reason: "Destructive operation"
+    
+  - operation: "REINDEX SYSTEM"
+    category: "Index Operations"
+    reason: "System catalogs require exclusive access"
+    
+  - operation: "ALTER TABLE DROP COLUMN"
+    category: "ALTER TABLE Operations"
+    reason: "Requires table rewrite"
+    
+  - operation: "ALTER TABLE SET TABLESPACE"
+    category: "ALTER TABLE Operations"
+    reason: "Requires full table lock"
+    
+  - operation: "ALTER TABLE SET LOGGED/UNLOGGED"
+    category: "ALTER TABLE Operations"
+    reason: "Requires table rewrite"
+    
+  - operation: "ALTER TABLE RENAME TO"
+    category: "ALTER TABLE Operations"
+    reason: "Requires exclusive lock"
+    
+  - operation: "ALTER TABLE SET SCHEMA"
+    category: "ALTER TABLE Operations"
+    reason: "Requires exclusive lock"
+    
+  - operation: "LOCK TABLE ACCESS EXCLUSIVE"
+    category: "Explicit Locking"
+    reason: "Explicitly requests exclusive lock"
+    
+  - operation: "DROP DATABASE"
+    category: "DDL Operations"
+    reason: "Requires exclusive database access"
+
+# Summary statistics
+summary:
+  total_critical_operations: 31
+  operations_in_transaction_mode: 29
+  additional_no_transaction_mode: 2
+  with_safe_alternatives: 18
+  without_safe_alternatives: 12
+  partial_alternatives: 1  # CLUSTER
+
+# Real-world batch processing example
+batch_processing_example:
+  description: "Real-World Batch Processing Example"
+  code: |
+    # 1. Export IDs
+    psql -h db -U user -d mydb -c "\COPY (SELECT id FROM users WHERE active = false ORDER BY id) TO '/tmp/inactive_users.csv' CSV"
+    
+    # 2. Split into smaller files (optional for very large datasets)
+    split -l 5000 /tmp/inactive_users.csv /tmp/batch_
+    
+    # 3. Process with script (Python example pattern)
+    # - Read file/chunk
+    # - Build explicit ID lists: UPDATE users SET deleted_at = NOW() WHERE id IN (1,2,3,4,5...)
+    # - Commit every batch
+    # - Log progress to file/table
+    # - Sleep between batches
+    # - Handle connection failures with retry

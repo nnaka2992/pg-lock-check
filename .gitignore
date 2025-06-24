@@ -35,7 +35,14 @@ testdata/
 
 # Local configuration
 *.local
+
+# Claude AI assistant files
+CLAUDE.md
 CLAUDE.local.md
 
-# GoReleaser
+# Temporary files from code generation
+*.bak
+*.raw
+
+# Build artifacts
 dist/

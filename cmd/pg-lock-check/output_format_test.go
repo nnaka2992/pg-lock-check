@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"sort"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -578,7 +579,20 @@ func TestJSONOutputFormat(t *testing.T) {
 					continue
 				}
 
-				for j, expectedTable := range expected.tables {
+				// Sort tables by name for consistent comparison
+				sort.Slice(tables, func(i, j int) bool {
+					return tables[i].(map[string]interface{})["name"].(string) <
+						tables[j].(map[string]interface{})["name"].(string)
+				})
+
+				// Sort expected tables too
+				sortedExpected := make([]ExpectedTable, len(expected.tables))
+				copy(sortedExpected, expected.tables)
+				sort.Slice(sortedExpected, func(i, j int) bool {
+					return sortedExpected[i].name < sortedExpected[j].name
+				})
+
+				for j, expectedTable := range sortedExpected {
 					table := tables[j].(map[string]interface{})
 					if name := table["name"].(string); name != expectedTable.name {
 						t.Errorf("Result %d, table %d: expected name %s, got %s", i, j, expectedTable.name, name)

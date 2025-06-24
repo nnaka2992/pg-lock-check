@@ -2,96 +2,147 @@
 
 ## Command Structure
 ```bash
-pg-lock-check [OPTIONS] [SQL_STATEMENT | -f FILE...]
+pg-lock-check [OPTIONS] [SQL_STATEMENT]
 ```
 
-## Input Methods
-1. **Direct SQL input**: Pass SQL statement as argument
-2. **File input**: Use `-f` or `--file` flag for file(s)
-3. **Multiple files**: Support glob patterns and multiple file arguments
+## Input Methods (Priority Order)
+1. **File input**: Use `-f` or `--file` flag (highest priority)
+2. **Direct SQL input**: Pass SQL statement as argument
+3. **Stdin**: Read from stdin when piped data is detected
 
 ## Options/Flags
 
-### Required (one of):
+### Input:
 - `SQL_STATEMENT` - Direct SQL input as argument
-- `-f, --file FILE` - Read SQL from file(s)
+- `-f, --file FILE` - Read SQL from file (takes precedence over other inputs)
 
 ### Transaction Mode:
-- `--transaction` - Analyze assuming wrapped in transaction (default)
 - `--no-transaction` - Analyze assuming no transaction wrapper
+- Default behavior: Analyze assuming wrapped in transaction
+
+### Suggestion Control:
+- `--no-suggestion` - Disable safe migration suggestions for CRITICAL operations
+- Default behavior: Show suggestions for CRITICAL operations
 
 ### Output Control:
 - `-o, --output FORMAT` - Output format: `text` (default), `json`, `yaml`
-- `-v, --verbose` - Show detailed analysis including safe operations
-- `-q, --quiet` - Only show errors and critical issues
 - `--no-color` - Disable colored output
-
-### Filtering:
-- `-s, --severity LEVEL` - Minimum severity to report: `error`, `critical`, `warning`, `info`
-- `--ignore-info` - Don't show INFO level issues (shorthand for `-s warning`)
+- `-q, --quiet` - Quiet mode (flag exists but implementation limited)
+- `--verbose` - Verbose output (flag exists but implementation limited)
 
 ### Help/Version:
 - `-h, --help` - Show help message
-- `-V, --version` - Show version information
+- `-v, --version` - Show version information
 
 ## Output Format
 
 ### Default (text):
 ```
-[ERROR] line 5: CREATE INDEX CONCURRENTLY idx_users_email ON users(email)
-  Cannot run inside a transaction block
-  Suggestion: Use --no-transaction flag or remove from transaction
+[CRITICAL] UPDATE users SET status = 'active'
+Suggestion for safe migration:
+  Step: Add a WHERE clause to target specific rows
+    Can run in transaction: Yes
+    SQL:
+      UPDATE users SET status = 'active' WHERE id IN (
+        SELECT id FROM users 
+        WHERE <condition> 
+        LIMIT 1000
+      );
 
-[CRITICAL] line 12: UPDATE users SET status = 'active'
-  Missing WHERE clause locks entire table (RowExclusive + all row locks)
-  Lock type: RowExclusive
-  Impact: Blocks all concurrent updates/deletes on users table
+  Step: Repeat the batched UPDATE until all rows are processed
+    Can run in transaction: No
+    Instructions:
+      Monitor pg_stat_activity between batches.
+      Add delays if needed to reduce lock contention.
 
-Summary: 1 error, 1 critical, 0 warnings, 2 info
+Summary: 2 statements analyzed
 ```
 
 ### JSON format:
 ```json
 {
+  "summary": {
+    "total_statements": 2,
+    "by_severity": {
+      "ERROR": 0,
+      "CRITICAL": 1,
+      "WARNING": 0,
+      "INFO": 1
+    }
+  },
   "results": [
     {
-      "severity": "ERROR",
-      "line": 5,
-      "statement": "CREATE INDEX CONCURRENTLY idx_users_email ON users(email)",
-      "message": "Cannot run inside a transaction block",
-      "suggestion": "Use --no-transaction flag or remove from transaction",
-      "lock_type": null
+      "index": 0,
+      "sql": "UPDATE users SET status = 'active'",
+      "line_number": 1,
+      "severity": "CRITICAL",
+      "operation": "UPDATE without WHERE",
+      "lock_type": "RowExclusive",
+      "tables": [
+        {
+          "name": "users",
+          "lock_type": "RowExclusive"
+        }
+      ],
+      "suggestion": {
+        "steps": [
+          {
+            "description": "Add a WHERE clause to target specific rows",
+            "can_run_in_transaction": true,
+            "output": "UPDATE users SET status = 'active' WHERE id IN (\n  SELECT id FROM users \n  WHERE <condition> \n  LIMIT 1000\n);"
+          },
+          {
+            "description": "Repeat the batched UPDATE until all rows are processed",
+            "can_run_in_transaction": false,
+            "output": "Monitor pg_stat_activity between batches.\nAdd delays if needed to reduce lock contention."
+          }
+        ]
+      }
     }
-  ],
-  "summary": {
-    "error": 1,
-    "critical": 1,
-    "warning": 0,
-    "info": 2
-  }
+  ]
 }
 ```
 
 ### YAML format:
 ```yaml
-results:
-  - severity: ERROR
-    line: 5
-    statement: CREATE INDEX CONCURRENTLY idx_users_email ON users(email)
-    message: Cannot run inside a transaction block
-    suggestion: Use --no-transaction flag or remove from transaction
-    lock_type: null
 summary:
-  error: 1
-  critical: 1
-  warning: 0
-  info: 2
+  total_statements: 2
+  by_severity:
+    ERROR: 0
+    CRITICAL: 1
+    WARNING: 0
+    INFO: 1
+results:
+  - index: 0
+    sql: "UPDATE users SET status = 'active'"
+    line_number: 1
+    severity: CRITICAL
+    operation: "UPDATE without WHERE"
+    lock_type: RowExclusive
+    tables:
+      - name: users
+        lock_type: RowExclusive
+    suggestion:
+      steps:
+        - description: "Add a WHERE clause to target specific rows"
+          can_run_in_transaction: true
+          output: |
+            UPDATE users SET status = 'active' WHERE id IN (
+              SELECT id FROM users 
+              WHERE <condition> 
+              LIMIT 1000
+            );
+        - description: "Repeat the batched UPDATE until all rows are processed"
+          can_run_in_transaction: false
+          output: |
+            Monitor pg_stat_activity between batches.
+            Add delays if needed to reduce lock contention.
 ```
 
 ## Exit Codes
-- `0` - Success (analysis completed, regardless of severity)
-- `1` - Runtime error (file not found, read errors, etc.)
-- `2` - Parse error (invalid SQL syntax)
+- `0` - Success - Analysis completed
+- `1` - Runtime error - File not found, read errors, flag parsing errors, no SQL provided
+- `2` - Parse error - Invalid SQL syntax
 
 ## Examples
 
@@ -102,37 +153,82 @@ pg-lock-check "ALTER TABLE users ADD COLUMN age INT DEFAULT 0"
 # Analyze file
 pg-lock-check -f migration.sql
 
-# Analyze multiple files
-pg-lock-check -f migrations/*.sql
+# Pipe from stdin
+echo "TRUNCATE users;" | pg-lock-check
 
 # Non-transaction mode
 pg-lock-check --no-transaction -f concurrent_index.sql
 
-# JSON output with minimum severity
-pg-lock-check -f migration.sql -o json -s warning
+# JSON output
+pg-lock-check -f migration.sql -o json
 
-# Verbose mode shows all operations
-pg-lock-check -v -f migration.sql
+# YAML output
+pg-lock-check -o yaml "DROP TABLE users"
 
-# Quiet mode for CI/CD
-pg-lock-check -q -f migration.sql
+# Disable suggestions
+pg-lock-check --no-suggestion "UPDATE users SET deleted = true"
+
+# Non-transaction mode with JSON output
+pg-lock-check --no-transaction -o json "VACUUM FULL users"
 ```
 
-## Error Handling
-- Clear error messages for invalid SQL syntax
-- Handle empty files gracefully
-- Support comments in SQL files
-- Handle multi-statement files
-- Detect and report if file doesn't exist
+## Key Features
 
-## Performance Requirements
-- Process files up to 10MB efficiently
-- Support analyzing 100+ migration files in batch
-- Stream processing for large files
+### Safe Migration Suggestions
+- **Enabled by default** for CRITICAL severity operations
+- Provides step-by-step migration patterns to avoid long locks
+- Shows whether each step can run in a transaction
+- Can be disabled with `--no-suggestion` flag
+- Covers 18 CRITICAL operations with safe alternatives (100% coverage)
 
-## Implementation Notes
-- Use cobra or similar for CLI framework
-- Support both short and long flag formats
-- Implement proper signal handling (Ctrl+C)
-- Provide helpful error messages with context
-- Support reading from stdin when no arguments provided
+### Transaction Mode Analysis
+- **Default**: Assumes SQL runs inside a transaction
+- `--no-transaction`: Analyzes as if SQL runs outside a transaction
+- Affects severity levels (e.g., VACUUM is ERROR in transaction, WARNING outside)
+- Some operations like CREATE INDEX CONCURRENTLY require no-transaction mode
+
+### Multi-Statement Support
+- Handles multiple SQL statements in a single input
+- Tracks line numbers for each statement
+- Analyzes each statement independently
+- Provides aggregated summary
+
+### Table Lock Tracking
+- Extracts affected tables from each statement
+- Shows lock type for each table
+- Handles complex queries with joins, CTEs, and subqueries
+
+## Implementation Details
+
+### Core Components Integration
+- **Parser** (`internal/parser/`): Wraps pg_query_go for SQL parsing
+- **Analyzer** (`internal/analyzer/`): Analyzes lock severity based on operation
+- **Suggester** (`internal/suggester/`): Generates safe migration suggestions
+- **Metadata** (`internal/metadata/`): Extracts SQL metadata for suggestions
+
+### Severity Levels
+- **ERROR**: Operations that cannot run in the specified mode
+- **CRITICAL**: Operations causing severe locks (e.g., TRUNCATE, DROP TABLE)
+- **WARNING**: Operations with moderate impact (e.g., targeted UPDATE/DELETE)
+- **INFO**: Operations with minimal impact (e.g., simple INSERT, SELECT)
+
+### Notable Implementation Differences from Original Design
+1. **Removed Features**:
+   - No `-s/--severity` filter flag
+   - No `--ignore-info` flag
+   - No multiple file support with glob patterns
+   - No `-V` for version (uses `-v` instead)
+
+2. **Added Features**:
+   - `--no-suggestion` flag for disabling suggestions
+   - Stdin support for piped input
+   - Comprehensive suggestion system with transaction safety info
+   - More structured JSON/YAML output with suggestion details
+
+## Implementation Status
+- ✅ CLI fully implemented with cobra framework
+- ✅ All core features operational
+- ✅ Safe migration suggestions integrated
+- ✅ All output formats working
+- ⚠️ `--quiet` and `--verbose` flags exist but have limited effect
+- ⚠️ `--no-color` flag exists but color implementation not visible

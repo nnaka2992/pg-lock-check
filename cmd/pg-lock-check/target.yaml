@@ -1,0 +1,315 @@
+- operation: "no recommendation"
+  sql: INSERT INTO users (name) VALUES ('test');
+
+- operation: "UPDATE without WHERE"
+  sql: UPDATE users SET active = false;
+  suggestion:
+    steps:
+      - description: "Export target row IDs to file"
+        can_run_in_transaction: true
+        output: |
+          \COPY (SELECT id FROM users ORDER BY id) TO '/path/to/target_ids.csv' CSV
+
+      - description: "Process file in batches with progress tracking"
+        can_run_in_transaction: false
+        output: |
+          1. Read ID file in chunks (e.g., 1000-5000 rows)
+          2. For each chunk:
+             - Build explicit ID list
+             - Execute UPDATE usrs SET active = false WHERE "id" IN (chunk_ids)
+             - Commit transaction
+             - Log progress (line number or ID range)
+             - Sleep 100-500ms between batches
+             - Monitor replication lag
+          3. Handle failures with resume capability
+
+- operation: "DELETE without WHERE"
+  sql: DELETE FROM sessions;
+  suggestion:
+    steps:
+      - description: "Export target row IDs to file"
+        can_run_in_transaction: true
+        output: |
+          \COPY (SELECT id FROM sessions ORDER BY id) TO '/path/to/target_ids.csv' CSV
+
+      - description: "Process file in batches"
+        can_run_in_transaction: false
+        output: |
+          1. Read ID file in chunks (e.g., 1000-5000 rows)
+          2. For each chunk:
+             - Build explicit ID list
+             - Execute DELETE FROM sessions WHERE id IN (chunk_ids)
+             - Commit transaction
+             - Log progress
+             - Sleep 100-500ms between batches
+          3. Monitor locks and replication lag
+
+- operation: "MERGE without WHERE"
+  sql: MERGE INTO users USING new_users ON users.id = new_users.id WHEN MATCHED THEN UPDATE SET email = new_users.email WHEN NOT MATCHED THEN INSERT (id, name, email, created_at, updated_at) VALUES (new_users.id, new_users.name, new_users.email, new_users.created_at, new_users.updated_at);
+  suggestion:
+    steps:
+      - description: "Export source data IDs to file"
+        can_run_in_transaction: true
+        sql_template: |
+          \COPY (SELECT "id" FROM new_users ORDER BY id) TO '/path/to/source_ids.csv' CSV
+
+      - description: "Add conditions to WHEN clauses or batch with subqueries"
+        can_run_in_transaction: false
+        output: |
+          1. Read ID file in chunks (e.g., 1000-5000 rows)
+          2. For each chunk:
+             - Build explicit ID list
+             - Execute MERGE with modified source:
+               MERGE INTO usres
+               USING (SELECT * FROM new_usres WHERE "id" IN (chunk_ids)) AS source
+               ON users.id = new_users.id
+               WHEN MATCHED THEN UPDATE SET email = new_users.email
+               WHEN NOT MATCHED THEN INSERT (id, name, email, created_at, updated_at) VALUES (new_users.id, new_users.name, new_users.email, new_users.created_at, new_users.updated_at)
+             - Commit transaction
+             - Log progress (chunk number, rows affected)
+             - Sleep 100-500ms between batches
+             - Monitor for lock conflicts
+          3. Verify merge completion with counts
+
+- operation: "DROP INDEX"
+  sql: DROP INDEX idx_users_email;
+  suggestion:
+    steps:
+      - description: "Use DROP INDEX CONCURRENTLY outside transaction"
+        can_run_in_transaction: false
+        output: |
+          DROP INDEX CONCURRENTLY idx_users_email;
+
+- operation: "CREATE INDEX"
+  sql: CREATE INDEX idx_users_email ON users(email);
+  suggestion:
+    steps:
+      - description: "Use CREATE INDEX CONCURRENTLY outside transaction"
+        can_run_in_transaction: false
+        output: |
+          CREATE INDEX CONCURRENTLY idx_users_email ON users(email);
+
+- operation: "CREATE UNIQUE INDEX"
+  sql: CREATE UNIQUE INDEX uniq_users_username ON users(username);
+  suggestion:
+    steps:
+      - description: "Use CREATE UNIQUE INDEX CONCURRENTLY outside transaction"
+        can_run_in_transaction: false
+        output: |
+          CREATE UNIQUE INDEX CONCURRENTLY uniq_users_username ON users(username);
+
+- operation: "REINDEX"
+  sql: REINDEX INDEX idx_users_email;
+  suggestion:
+    steps:
+      - description: "Use `REINDEX CONCURRENTLY` or CREATE new index + DROP old pattern"
+        can_run_in_transaction: false
+        output: |
+          REINDEX INDEX CONCURRENTLY idx_users_email;
+
+- operation: "REINDEX TABLE"
+  sql: REINDEX TABLE users;
+  suggestion:
+    steps:
+      - description: "Export all index names for the table"
+        can_run_in_transaction: true
+        output: |
+          \COPY (SELECT indexname FROM pg_indexes WHERE tablename = 'users' ORDER BY indexname) TO '/path/to/table_indexes.csv' CSV
+
+      - description: "Reindex each index individually"
+        can_run_in_transaction: false
+        output: |
+          For each index from the exported file:
+          - Execute: REINDEX INDEX CONCURRENTLY index_name;
+          - Monitor progress and locks
+          - Handle any errors (skip corrupted indexes, log failures)
+          - Sleep briefly between indexes to reduce load
+
+- operation: "REINDEX DATABASE"
+  sql: REINDEX DATABASE mydb;
+  suggestion:
+    steps:
+      - description: "Export all index names in the database"
+        can_run_in_transaction: true
+        output: |
+          \COPY (SELECT schemaname || '.' || indexname FROM pg_indexes WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY schemaname, indexname) TO '/path/to/database_indexes.csv' CSV
+
+      - description: "Reindex each index individually"
+        can_run_in_transaction: false
+        output: |
+          For each index from the exported file:
+          - Execute: REINDEX INDEX CONCURRENTLY schema.index_name;
+          - Monitor progress and locks
+          - Handle any errors (skip corrupted indexes, log failures)
+          - Sleep briefly between indexes to reduce load
+
+- operation: "REINDEX SCHEMA"
+  sql: REINDEX SCHEMA public;
+  suggestion:
+    steps:
+      - description: "Export all index names in the schema"
+        can_run_in_transaction: true
+        output: |
+          \COPY (SELECT indexname FROM pg_indexes WHERE schemaname = 'public' ORDER BY indexname) TO '/path/to/schema_indexes.csv' CSV
+
+      - description: "Reindex each index individually"
+        can_run_in_transaction: false
+        output: |
+          For each index from the exported file:
+          - Execute: REINDEX INDEX CONCURRENTLY schema.index_name;
+          - Monitor progress and locks
+          - Handle any errors (skip corrupted indexes, log failures)
+          - Sleep briefly between indexes to reduce load
+
+- operation: "ALTER TABLE ADD COLUMN with volatile DEFAULT"
+  sql: ALTER TABLE users ADD COLUMN new_id uuid DEFAULT gen_random_uuid();
+  suggestion:
+    steps:
+      - description: "`ADD COLUMN` without default"
+        can_run_in_transaction: true
+        output: |
+          ALTER TABLE usres ADD COLUMN new_id uuid;
+
+      - description: "Batch update with default values (separate transactions per batch)"
+        can_run_in_transaction: false
+        output: |
+          1. Identify rows with NULL values in the new column
+          2. Export row IDs that need updating (if needed)
+          3. For each batch of rows (e.g., 1000-5000):
+             - Build explicit ID list
+             - Execute UPDATE users SET new_id = gen_random_uuid() WHERE id IN (id_list)
+             - Commit transaction
+             - Log progress
+             - Sleep 100-500ms between batches
+             - Monitor for lock conflicts
+          4. Verify all rows have been updated
+
+      - description: "`ALTER COLUMN SET DEFAULT`"
+        can_run_in_transaction: true
+        output: |
+          ALTER TABLE users ALTER COLUMN new_id SET DEFAULT gen_random_uuid();
+
+- operation: "ALTER TABLE ALTER COLUMN TYPE"
+  sql: ALTER TABLE users ALTER COLUMN email TYPE VARCHAR(255);
+  suggestion:
+    steps:
+      - description: "Add new column"
+        can_run_in_transaction: true
+        output: |
+          ALTER TABLE users ADD COLUMN email_new TYPE VARCHAR(255);
+
+      - description: "Add sync trigger"
+        can_run_in_transaction: true
+        output: |
+          CREATE OR REPLACE FUNCTION sync_users_email() RETURNS TRIGGER AS $$
+          BEGIN
+            NEW.email_new := NEW.email::VARCHAR(255);
+            RETURN NEW;
+          END;
+          $$ LANGUAGE plpgsql;
+
+          CREATE TRIGGER users_email_sync_trigger
+          BEFORE INSERT OR UPDATE ON users
+          FOR EACH ROW EXECUTE FUNCTION sync_users_emails();
+
+      - description: "Backfill script"
+        can_run_in_transaction: false
+        notes: "Batch update new column from old column"
+
+      - description: "Atomic swap"
+        can_run_in_transaction: true
+        output: |
+          BEGIN;
+          -- Set lock timeout to avoid long waits
+          SET LOCAL lock_timeout = '5s';
+
+          -- Clean up sync trigger and function
+          DROP TRIGGER users_email_sync_trigger ON users
+          DROP FUNCTION sync_users_email();
+
+          -- Drop old column (fast, no table rewrite)
+          ALTER TABLE users DROP COLUMN email;
+
+          -- Rename new column to old name
+          ALTER TABLE users RENAME COLUMN email_new TO email;
+          COMMIT;
+
+- operation: "ALTER TABLE ADD PRIMARY KEY"
+  sql: ALTER TABLE users ADD PRIMARY KEY (id);
+  suggestion:
+    steps:
+      - description: "First `CREATE UNIQUE INDEX CONCURRENTLY`"
+        can_run_in_transaction: false
+        output: |
+          CREATE UNIQUE INDEX CONCURRENTLY users_pkey ON users (id);
+
+      - description: "Then `ALTER TABLE ADD CONSTRAINT pkey PRIMARY KEY USING INDEX`"
+        can_run_in_transaction: true
+        output: |
+          ALTER TABLE users ADD CONSTRAINT users_pkey PRIMARY KEY USING INDEX users_pkey;
+
+- operation: "ALTER TABLE ADD CONSTRAINT CHECK"
+  sql: ALTER TABLE users ADD CONSTRAINT check_age CHECK (age >= 18);
+  suggestion:
+    steps:
+      - description: "Use `ADD CONSTRAINT NOT VALID`"
+        can_run_in_transaction: true
+        output: |
+          ALTER TABLE users ADD CONSTRAINT check_age CHECK (age >= 18) NOT VALID;
+
+      - description: "Then `VALIDATE CONSTRAINT`"
+        can_run_in_transaction: true
+        output: |
+          ALTER TABLE users VALIDATE CONSTRAINT check_age;
+
+- operation: "ALTER TABLE SET NOT NULL"
+  sql: ALTER TABLE users ALTER COLUMN email SET NOT NULL;
+  suggestion:
+    steps:
+      - description: "`ADD CONSTRAINT CHECK (col IS NOT NULL) NOT VALID`"
+        can_run_in_transaction: true
+        output: |
+          ALTER TABLE users ADD CONSTRAINT users_age_not_null CHECK (age IS NOT NULL) NOT VALID;
+
+      - description: "`VALIDATE CONSTRAINT`"
+        can_run_in_transaction: true
+        output: |
+          ALTER TABLE users VALIDATE CONSTRAINT users_age_not_null;
+
+      - description: "`SET NOT NULL`"
+        can_run_in_transaction: true
+        output: |
+          ALTER TABLE users ALTER COLUMN age SET NOT NULL;
+
+      - description: "Drop constraint"
+        can_run_in_transaction: true
+        type: sql
+        output: |
+          ALTER TABLE users DROP CONSTRAINT users_age_not_null;
+
+- operation: "CLUSTER"
+  sql: CLUSTER users USING idx_users_id;
+  suggestion:
+    steps:
+      - description: "Consider `pg_repack` extension for online reorganization"
+        can_run_in_transaction: false
+        output: |
+          pg_repack -t users -i idx_usre_id -d <YOUR_DATABASE>
+
+- operation: "REFRESH MATERIALIZED VIEW"
+  sql: REFRESH MATERIALIZED VIEW user_stats;
+  suggestion:
+    steps:
+      - description: "Use `REFRESH MATERIALIZED VIEW CONCURRENTLY` (requires unique index)"
+        can_run_in_transaction: false
+        output: |
+          REFRESH MATERIALIZED VIEW CONCURRENTLY user_stats;
+
+- operation: "VACUUM FULL"
+  sql: VACUUM FULL users;
+  suggestion:
+    steps:
+      - description: "Use `pg_repack` extension instead"
+        can_run_in_transaction: false
+        output: |
+          pg_repack -n -t users  -d <YOUR_DATABASE>
