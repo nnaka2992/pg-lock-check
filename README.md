@@ -13,7 +13,7 @@
 
 **Catch dangerous PostgreSQL migrations before they bring down production** 🚨
 
-![pg-lock-check demo](docs/assets/demo.gif)
+![pg-lock-check demo](docs/sample/demo.gif)
 
 [**Quick Start**](#-quick-start) • [**Why You Need This**](#-why-you-need-this) • [**Installation**](#-installation) • [**Usage**](#-usage) • [**CI/CD Integration**](#-cicd-integration)
 
@@ -30,11 +30,28 @@ go install github.com/nnaka2992/pg-lock-check/cmd/pg-lock-check@latest
 # Catch that dangerous migration
 $ pg-lock-check "UPDATE users SET active = false"
 [CRITICAL] UPDATE users SET active = false
+Suggestion for safe migration:
+  Step: Export target row IDs to file
+    Can run in transaction: Yes
+    SQL:
+      \COPY (SELECT id FROM users ORDER BY id) TO '/path/to/target_ids.csv' CSV
+  Step: Process file in batches with progress tracking
+    Can run in transaction: No
+    Instructions:
+      1. Read ID file in chunks (e.g., 1000-5000 rows)
+      2. For each chunk:
+         - Build explicit ID list
+         - Execute UPDATE users SET active = false WHERE id IN (chunk_ids)
+         - Commit transaction
+         - Log progress (line number or ID range)
+         - Sleep 100-500ms between batches
+         - Monitor replication lag
+      3. Handle failures with resume capability
 
 Summary: 1 statements analyzed
 
-# Check your migration files
-$ pg-lock-check -f migrations/*.sql
+# Check your migration file
+$ pg-lock-check -f migration.sql
 ```
 
 ## 💡 Why You Need This
@@ -58,9 +75,10 @@ UPDATE users SET last_login = NOW();
 
 - 🧠 **Smart Analysis** - Knows the difference between `UPDATE` with and without `WHERE`
 - 🎭 **Transaction Context** - `CREATE INDEX CONCURRENTLY` works outside transactions, fails inside
+- 💡 **Safe Migration Suggestions** - Get actionable alternatives for dangerous operations
 - 📊 **Multiple Output Formats** - Human-readable, JSON for your tools, YAML because why not
 - 🚪 **Exit Codes That Make Sense** - Perfect for CI/CD pipelines
-- 📁 **Bulk Analysis** - Check entire migration directories at once
+- 📁 **File Analysis** - Check SQL files directly
 - ⚡ **Lightning Fast** - Won't slow down your CI/CD pipeline
 
 ## 📦 Installation
@@ -99,6 +117,23 @@ go build -o pg-lock-check ./cmd/pg-lock-check
 # This innocent-looking query...
 $ pg-lock-check "UPDATE users SET preferences = '{}'"
 [CRITICAL] UPDATE users SET preferences = '{}'
+Suggestion for safe migration:
+  Step: Export target row IDs to file
+    Can run in transaction: Yes
+    SQL:
+      \COPY (SELECT id FROM users ORDER BY id) TO '/path/to/target_ids.csv' CSV
+  Step: Process file in batches with progress tracking
+    Can run in transaction: No
+    Instructions:
+      1. Read ID file in chunks (e.g., 1000-5000 rows)
+      2. For each chunk:
+         - Build explicit ID list
+         - Execute UPDATE users SET preferences = '{}' WHERE id IN (chunk_ids)
+         - Commit transaction
+         - Log progress (line number or ID range)
+         - Sleep 100-500ms between batches
+         - Monitor replication lag
+      3. Handle failures with resume capability
 
 Summary: 1 statements analyzed
 ```
@@ -118,14 +153,11 @@ Summary: 1 statements analyzed
 <summary><b>Check Your Migration Files</b></summary>
 
 ```bash
-# Single file
+# Check a migration file
 pg-lock-check -f migrations/20240114_add_index.sql
 
-# All migrations at once
-pg-lock-check -f migrations/*.sql
-
 # From your CI/CD pipeline
-pg-lock-check -f migrations/*.sql || exit 1
+pg-lock-check -f migration.sql || exit 1
 ```
 </details>
 
@@ -163,6 +195,30 @@ fi
 ```
 </details>
 
+## 💡 Safe Migration Suggestions
+
+pg-lock-check doesn't just warn you - it shows you how to fix dangerous operations! Get step-by-step migration patterns that avoid long-running locks.
+
+- ✅ **18 CRITICAL operations** have safe alternatives
+- 🎯 **Smart suggestions** for batching, CONCURRENTLY operations, and more
+- 📊 **Transaction safety** indicators for each step
+
+See [Safe Migration Patterns](docs/design/suggestions.md) for all available suggestions.
+
+### Quick Example
+
+```bash
+$ pg-lock-check "CREATE INDEX idx_users_email ON users(email)"
+[CRITICAL] CREATE INDEX idx_users_email ON users(email)
+Suggestion for safe migration:
+  Step: Use `CREATE INDEX CONCURRENTLY` outside transaction
+    Can run in transaction: No
+    SQL:
+      CREATE INDEX CONCURRENTLY idx_users_email ON users (email);
+```
+
+Disable suggestions with `--no-suggestion` flag.
+
 ## 🚦 Severity Levels
 
 | Level | What It Means | Example | Should You Run It? |
@@ -194,7 +250,7 @@ jobs:
       - run: go install github.com/nnaka2992/pg-lock-check/cmd/pg-lock-check@latest
       - name: Check for dangerous locks
         run: |
-          pg-lock-check -f migrations/*.sql -o json | \
+          pg-lock-check -f migration.sql -o json | \
           jq -e '.results[] | select(.severity == "CRITICAL" or .severity == "ERROR")' && \
           echo "🚨 Dangerous operations detected!" && exit 1 || \
           echo "✅ Migrations look safe!"
@@ -226,7 +282,9 @@ go build -o pg-lock-check ./cmd/pg-lock-check
 ## 🏗️ Architecture
 
 - **Parser**: Wraps `pg_query_go` for PostgreSQL AST parsing
-- **Analyzer**: Maps 229 operations to lock severity levels  
+- **Analyzer**: Maps 229 operations to lock severity levels
+- **Suggester**: Provides safe migration patterns for CRITICAL operations
+- **Metadata**: Extracts SQL metadata for suggestion generation
 - **CLI**: Clean interface with multiple output formats
 
 ## 🤝 Contributing
@@ -235,8 +293,10 @@ Found a bug? Want a feature? PRs welcome!
 
 ## 🔮 Future Work
 
-- **Real-world severity**: Base severity on actual production impact, not just lock types
-- **Safe migration suggestions**: Automatically suggest safer alternatives for dangerous operations
+- **Enhanced CLI output**: Add detailed lock information and impact descriptions
+- **Parallel analysis**: Analyze multiple files concurrently for faster CI/CD
+- **Custom rules**: Define your own severity levels for specific operations
+- **Long transaction handling**: Some WARNING level operations can escalate to CRITICAL with long-running transactions
 
 ## License
 

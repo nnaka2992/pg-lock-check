@@ -13,7 +13,7 @@
 
 **本番環境を停止させる危険なPostgreSQLマイグレーションを事前に検出** 🚨
 
-![pg-lock-check demo](docs/assets/demo.gif)
+![pg-lock-check demo](docs/sample/demo.gif)
 
 [**クイックスタート**](#-クイックスタート) • [**なぜ必要か**](#-なぜ必要か) • [**インストール**](#-インストール) • [**使い方**](#-使い方) • [**CI/CD連携**](#-cicd連携)
 
@@ -30,11 +30,28 @@ go install github.com/nnaka2992/pg-lock-check/cmd/pg-lock-check@latest
 # 危険なマイグレーションを検出
 $ pg-lock-check "UPDATE users SET active = false"
 [CRITICAL] UPDATE users SET active = false
+Suggestion for safe migration:
+  Step: Export target row IDs to file
+    Can run in transaction: Yes
+    SQL:
+      \COPY (SELECT id FROM users ORDER BY id) TO '/path/to/target_ids.csv' CSV
+  Step: Process file in batches with progress tracking
+    Can run in transaction: No
+    Instructions:
+      1. Read ID file in chunks (e.g., 1000-5000 rows)
+      2. For each chunk:
+         - Build explicit ID list
+         - Execute UPDATE users SET active = false WHERE id IN (chunk_ids)
+         - Commit transaction
+         - Log progress (line number or ID range)
+         - Sleep 100-500ms between batches
+         - Monitor replication lag
+      3. Handle failures with resume capability
 
 Summary: 1 statements analyzed
 
 # マイグレーションファイルをチェック
-$ pg-lock-check -f migrations/*.sql
+$ pg-lock-check -f migration.sql
 ```
 
 ## 💡 なぜ必要か
@@ -58,9 +75,10 @@ UPDATE users SET last_login = NOW();
 
 - 🧠 **スマート分析** - WHERE句ありなしの`UPDATE`の違いを理解
 - 🎭 **トランザクションコンテキスト** - `CREATE INDEX CONCURRENTLY`はトランザクション外でのみ動作
+- 💡 **安全なマイグレーション提案** - 危険な操作に対する実行可能な代替案を提供
 - 📊 **複数の出力形式** - 人間が読める形式、ツール用のJSON、YAML
 - 🚪 **意味のある終了コード** - CI/CDパイプラインに最適
-- 📁 **一括分析** - マイグレーションディレクトリ全体を一度にチェック
+- 📁 **ファイル分析** - SQLファイルを直接チェック
 - ⚡ **超高速** - CI/CDパイプラインを遅延させません
 
 ## 📦 インストール
@@ -99,6 +117,23 @@ go build -o pg-lock-check ./cmd/pg-lock-check
 # この無害に見えるクエリ...
 $ pg-lock-check "UPDATE users SET preferences = '{}'"
 [CRITICAL] UPDATE users SET preferences = '{}'
+Suggestion for safe migration:
+  Step: Export target row IDs to file
+    Can run in transaction: Yes
+    SQL:
+      \COPY (SELECT id FROM users ORDER BY id) TO '/path/to/target_ids.csv' CSV
+  Step: Process file in batches with progress tracking
+    Can run in transaction: No
+    Instructions:
+      1. Read ID file in chunks (e.g., 1000-5000 rows)
+      2. For each chunk:
+         - Build explicit ID list
+         - Execute UPDATE users SET preferences = '{}' WHERE id IN (chunk_ids)
+         - Commit transaction
+         - Log progress (line number or ID range)
+         - Sleep 100-500ms between batches
+         - Monitor replication lag
+      3. Handle failures with resume capability
 
 Summary: 1 statements analyzed
 ```
@@ -113,6 +148,18 @@ Summary: 1 statements analyzed
 ```
 
 ### 🔧 一般的なシナリオ
+
+<details>
+<summary><b>マイグレーションファイルのチェック</b></summary>
+
+```bash
+# 単一ファイル
+pg-lock-check -f migrations/20240114_add_index.sql
+
+# CI/CDパイプラインから
+pg-lock-check -f migration.sql || exit 1
+```
+</details>
 
 <details>
 <summary><b>CREATE INDEX CONCURRENTLYの処理</b></summary>
@@ -131,6 +178,46 @@ $ pg-lock-check --no-transaction "CREATE INDEX CONCURRENTLY idx_users_email ON u
 Summary: 1 statements analyzed
 ```
 </details>
+
+<details>
+<summary><b>ツール用のJSON出力</b></summary>
+
+```bash
+pg-lock-check -o json "TRUNCATE users" | jq '.severity'
+# "CRITICAL"
+
+# スクリプトで使用
+SEVERITY=$(pg-lock-check -o json "$SQL" | jq -r '.results[0].severity')
+if [ "$SEVERITY" = "CRITICAL" ]; then
+  echo "🚨 危険！ 本番環境で実行しないでください！"
+  exit 1
+fi
+```
+</details>
+
+## 💡 安全なマイグレーション提案
+
+pg-lock-checkは警告するだけでなく、危険な操作の修正方法も示します！長時間のロックを回避するマイグレーションパターンを段階的に提供します。
+
+- ✅ **18個のCRITICAL操作**に安全な代替案あり
+- 🎯 **スマートな提案**：バッチ処理、CONCURRENTLY操作など
+- 📊 **トランザクション安全性**：各ステップのインジケーター
+
+詳細は[安全なマイグレーションパターン](docs/design/suggestions.md)を参照。
+
+### 簡単な例
+
+```bash
+$ pg-lock-check "CREATE INDEX idx_users_email ON users(email)"
+[CRITICAL] CREATE INDEX idx_users_email ON users(email)
+Suggestion for safe migration:
+  Step: Use `CREATE INDEX CONCURRENTLY` outside transaction
+    Can run in transaction: No
+    SQL:
+      CREATE INDEX CONCURRENTLY idx_users_email ON users (email);
+```
+
+`--no-suggestion`フラグで提案を無効化できます。
 
 ## 🚦 重要度レベル
 
@@ -163,16 +250,53 @@ jobs:
       - run: go install github.com/nnaka2992/pg-lock-check/cmd/pg-lock-check@latest
       - name: Check for dangerous locks
         run: |
-          pg-lock-check -f migrations/*.sql -o json | \
+          pg-lock-check -f migration.sql -o json | \
           jq -e '.results[] | select(.severity == "CRITICAL" or .severity == "ERROR")' && \
           echo "🚨 Dangerous operations detected!" && exit 1 || \
           echo "✅ Migrations look safe!"
 ```
 
+### Pre-commit Hook
+```bash
+#!/bin/bash
+# .git/hooks/pre-commit
+files=$(git diff --cached --name-only --diff-filter=ACM | grep '\.sql$')
+if [ -n "$files" ]; then
+    echo "🔍 SQLファイルのロック問題をチェック中..."
+    pg-lock-check -f $files || exit 1
+fi
+```
+
+## 🛠️ 開発
+
+```bash
+# クローンとテスト
+git clone https://github.com/nnaka2992/pg-lock-check.git
+cd pg-lock-check
+go test ./...
+
+# ビルド
+go build -o pg-lock-check ./cmd/pg-lock-check
+```
+
+## 🏗️ アーキテクチャ
+
+- **Parser**: PostgreSQL AST解析用の`pg_query_go`をラップ
+- **Analyzer**: 229個の操作をロックの重要度レベルにマッピング
+- **Suggester**: CRITICAL操作に対する安全なマイグレーションパターンを提供
+- **Metadata**: 提案生成用のSQLメタデータを抽出
+- **CLI**: 複数の出力形式を持つクリーンなインターフェース
+
+## 🤝 貢献
+
+バグを見つけましたか？機能が欲しいですか？PRを歓迎します！
+
 ## 🔮 今後の予定
 
-- **実世界の重要度**: ロックタイプだけでなく、実際の本番環境への影響に基づく重要度
-- **安全なマイグレーション提案**: 危険な操作に対して自動的により安全な代替案を提案
+- **拡張されたCLI出力**: 詳細なロック情報と影響の説明を追加
+- **並列分析**: より高速なCI/CDのために複数ファイルを同時分析
+- **カスタムルール**: 特定の操作に対して独自の重要度レベルを定義
+- **長時間トランザクションの処理**: 長時間実行されるトランザクションで一部のWARNINGレベルの操作がCRITICALにエスカレートする問題に対応
 
 ## ライセンス
 
