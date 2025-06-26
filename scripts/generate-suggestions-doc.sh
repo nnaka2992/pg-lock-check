@@ -50,11 +50,25 @@ done
 # Remove trailing newline
 OPERATIONS_WITH_ALTERNATIVES_TABLE="${OPERATIONS_WITH_ALTERNATIVES_TABLE%$'\n'}"
 
-# Export all variables for envsubst
-export VERSION GENERATED_AT TOTAL_OPERATIONS WITH_ALTERNATIVES WITHOUT_ALTERNATIVES
-export WITH_ALTERNATIVES_PERCENT WITHOUT_ALTERNATIVES_PERCENT OPERATIONS_WITH_ALTERNATIVES_TABLE
-
-# Generate the documentation
-envsubst < "$TEMPLATE_FILE" > "$OUTPUT_FILE"
+# Generate the documentation using awk instead of envsubst
+awk -v version="$VERSION" \
+    -v generated_at="$GENERATED_AT" \
+    -v total_ops="$TOTAL_OPERATIONS" \
+    -v with_alt="$WITH_ALTERNATIVES" \
+    -v without_alt="$WITHOUT_ALTERNATIVES" \
+    -v with_alt_pct="$WITH_ALTERNATIVES_PERCENT" \
+    -v without_alt_pct="$WITHOUT_ALTERNATIVES_PERCENT" \
+    -v ops_table="$OPERATIONS_WITH_ALTERNATIVES_TABLE" \
+    '{
+        gsub(/\${VERSION}/, version);
+        gsub(/\${GENERATED_AT}/, generated_at);
+        gsub(/\${TOTAL_OPERATIONS}/, total_ops);
+        gsub(/\${WITH_ALTERNATIVES}/, with_alt);
+        gsub(/\${WITHOUT_ALTERNATIVES}/, without_alt);
+        gsub(/\${WITH_ALTERNATIVES_PERCENT}/, with_alt_pct);
+        gsub(/\${WITHOUT_ALTERNATIVES_PERCENT}/, without_alt_pct);
+        gsub(/\${OPERATIONS_WITH_ALTERNATIVES_TABLE}/, ops_table);
+        print
+    }' "$TEMPLATE_FILE" > "$OUTPUT_FILE"
 
 echo "Generated $OUTPUT_FILE with $TOTAL_OPERATIONS operations ($WITH_ALTERNATIVES with alternatives)"
