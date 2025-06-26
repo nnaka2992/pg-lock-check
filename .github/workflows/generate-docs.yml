@@ -1,38 +1,183 @@
-name: Generate Documentation
+name: Suggestions Documentation
 
 on:
-  push:
-    branches: [ main ]
+  # For PRs: Generate and comment
+  pull_request:
     paths:
       - 'internal/suggester/suggestions.yaml'
+      - 'docs/design/suggestions.template.md'
+      - 'scripts/generate-suggestions-doc.sh'
+  
+  # For main: Generate and commit
+  push:
+    branches: [main]
+    paths:
+      - 'internal/suggester/suggestions.yaml'
+      - 'docs/design/suggestions.template.md'
+      - 'scripts/generate-suggestions-doc.sh'
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
-  generate:
+  # Job 1: Generate and comment on PRs
+  pr-preview:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Install yq
-      run: |
-        sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-        sudo chmod +x /usr/local/bin/yq
-    
-    - name: Generate documentation
-      run: |
-        chmod +x scripts/generate-suggestions-doc.sh
-        ./scripts/generate-suggestions-doc.sh
-    
-    - name: Commit changes
-      run: |
-        git config --local user.email "github-actions[bot]@users.noreply.github.com"
-        git config --local user.name "github-actions[bot]"
-        git add docs/design/suggestions.md
-        git diff --staged --quiet || git commit -m "docs: auto-generate suggestions documentation [skip ci]"
-        git push
+      - uses: actions/checkout@v4
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Generate suggestions documentation
+        id: generate
+        run: |
+          # Make script executable
+          chmod +x scripts/generate-suggestions-doc.sh
+          
+          # Run generation and capture both stdout and stderr
+          if ./scripts/generate-suggestions-doc.sh 2>&1 | tee generation.log; then
+            echo "success=true" >> $GITHUB_OUTPUT
+          else
+            echo "success=false" >> $GITHUB_OUTPUT
+            echo "error<<EOF" >> $GITHUB_OUTPUT
+            cat generation.log >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Read generated documentation
+        if: steps.generate.outputs.success == 'true'
+        id: read_docs
+        run: |
+          # Check file size
+          FILE_SIZE=$(stat -c%s docs/design/suggestions.md 2>/dev/null || stat -f%z docs/design/suggestions.md)
+          echo "file_size=$FILE_SIZE" >> $GITHUB_OUTPUT
+          
+          # Read content with size limit check
+          if [ "$FILE_SIZE" -gt 65000 ]; then
+            echo "content_truncated=true" >> $GITHUB_OUTPUT
+            {
+              echo 'content<<EOF'
+              head -c 60000 docs/design/suggestions.md
+              echo -e "\n\n... (truncated, file too large for comment)"
+              echo 'EOF'
+            } >> $GITHUB_OUTPUT
+          else
+            echo "content_truncated=false" >> $GITHUB_OUTPUT
+            {
+              echo 'content<<EOF'
+              cat docs/design/suggestions.md
+              echo 'EOF'
+            } >> $GITHUB_OUTPUT
+          fi
+
+      - name: Find existing comment
+        uses: peter-evans/find-comment@v3
+        id: find_comment
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '<!-- suggestions-doc-preview -->'
+
+      - name: Create or update success comment
+        if: steps.generate.outputs.success == 'true'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            <!-- suggestions-doc-preview -->
+            ## Suggestions Documentation Preview
+
+            This is how `docs/design/suggestions.md` will look after merging this PR.
+
+            <details>
+            <summary><strong>View generated documentation</strong> (size: ${{ steps.read_docs.outputs.file_size }} bytes)</summary>
+
+            ```markdown
+            ${{ steps.read_docs.outputs.content }}
+            ```
+
+            </details>
+
+            ${{ steps.read_docs.outputs.content_truncated == 'true' && '> **Note**: Content truncated due to size limits. Full file will be generated after merge.' || '' }}
+
+            ---
+            *Generated automatically from suggestions.yaml • Last updated: ${{ github.event.pull_request.head.sha }}*
+          edit-mode: replace
+
+      - name: Create or update error comment
+        if: steps.generate.outputs.success == 'false'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            <!-- suggestions-doc-preview -->
+            ## Documentation Generation Failed
+
+            The suggestions documentation could not be generated due to an error:
+
+            ```
+            ${{ steps.generate.outputs.error }}
+            ```
+
+            **Please fix the error and push again.**
+
+            Common issues:
+            - Syntax errors in `suggestions.yaml`
+            - Template syntax errors in `suggestions.template.md`
+            - Missing required fields in YAML
+
+            ---
+            *Generated automatically • Commit: ${{ github.event.pull_request.head.sha }}*
+          edit-mode: replace
+
+  # Job 2: Generate and commit on main
+  update-main:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Generate suggestions documentation
+        run: |
+          chmod +x scripts/generate-suggestions-doc.sh
+          ./scripts/generate-suggestions-doc.sh
+
+      - name: Check for changes
+        id: check_changes
+        run: |
+          if git diff --quiet docs/design/suggestions.md; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "No changes to suggestions.md"
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "Changes detected in suggestions.md"
+          fi
+
+      - name: Commit and push if changed
+        if: steps.check_changes.outputs.changed == 'true'
+        run: |
+          git add docs/design/suggestions.md
+          git commit -m "docs: auto-generate suggestions documentation [skip ci]
+
+          Auto-generated from internal/suggester/suggestions.yaml
+          Triggered by: ${{ github.sha }}"
+          git push
