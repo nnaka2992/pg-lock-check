@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/nnaka2992/pg-lock-check/internal/parser"
+	pg_query "github.com/pganalyze/pg_query_go/v6"
 )
 
 // ===== 1. DML OPERATIONS =====
@@ -2887,31 +2888,147 @@ func TestAnalyzer_QuotedIdentifiers(t *testing.T) {
 	runAnalyzerTests(t, tests)
 }
 
-// ===== UNKNOWN OPERATIONS TEST =====
+// ===== EDGE CASE TESTS =====
 
-func TestAnalyzer_UnknownOperations(t *testing.T) {
-	// Test that analyzer handles unknown/future PostgreSQL operations gracefully
+func TestAnalyzeStatementEdgeCases(t *testing.T) {
+	a := New()
+
+	t.Run("nil AST", func(t *testing.T) {
+		stmt := parser.ParsedStatement{AST: nil}
+		result, err := a.AnalyzeStatement(stmt, InTransaction)
+		if err != nil {
+			t.Fatalf("Unexpected error for nil AST: %v", err)
+		}
+		if result.Severity != SeverityInfo {
+			t.Errorf("Expected SeverityInfo for nil AST, got %v", result.Severity)
+		}
+		if result.Operation() != "UNKNOWN" {
+			t.Errorf("Expected operation UNKNOWN for nil AST, got %q", result.Operation())
+		}
+	})
+
+	t.Run("empty Stmts slice", func(t *testing.T) {
+		stmt := parser.ParsedStatement{
+			AST: &pg_query.ParseResult{Stmts: []*pg_query.RawStmt{}},
+		}
+		result, err := a.AnalyzeStatement(stmt, InTransaction)
+		if err != nil {
+			t.Fatalf("Unexpected error for empty Stmts: %v", err)
+		}
+		if result.Severity != SeverityInfo {
+			t.Errorf("Expected SeverityInfo for empty Stmts, got %v", result.Severity)
+		}
+		if result.Operation() != "UNKNOWN" {
+			t.Errorf("Expected operation UNKNOWN for empty Stmts, got %q", result.Operation())
+		}
+	})
+}
+
+func TestAnalyzeTransactionDepthTracking(t *testing.T) {
+	p := parser.NewParser()
+
+	t.Run("BEGIN changes effective mode", func(t *testing.T) {
+		a := New()
+		sql := "BEGIN;\nCREATE INDEX CONCURRENTLY idx ON users(id);\nCOMMIT;"
+		parsed, err := p.ParseSQL(sql)
+		if err != nil {
+			t.Fatalf("Parse error: %v", err)
+		}
+
+		results, err := a.Analyze(parsed, NoTransaction)
+		if err != nil {
+			t.Fatalf("Analyze error: %v", err)
+		}
+
+		if len(results) != 3 {
+			t.Fatalf("Expected 3 results, got %d", len(results))
+		}
+
+		// After BEGIN, CREATE INDEX CONCURRENTLY should be ERROR (not allowed in transaction)
+		if results[1].Severity != SeverityError {
+			t.Errorf("CREATE INDEX CONCURRENTLY in transaction should be ERROR, got %v", results[1].Severity)
+		}
+	})
+
+	t.Run("COMMIT resets transaction depth", func(t *testing.T) {
+		a := New()
+		sql := "BEGIN;\nSELECT 1;\nCOMMIT;\nVACUUM users;"
+		parsed, err := p.ParseSQL(sql)
+		if err != nil {
+			t.Fatalf("Parse error: %v", err)
+		}
+
+		results, err := a.Analyze(parsed, NoTransaction)
+		if err != nil {
+			t.Fatalf("Analyze error: %v", err)
+		}
+
+		if len(results) != 4 {
+			t.Fatalf("Expected 4 results, got %d", len(results))
+		}
+
+		// After COMMIT, VACUUM should be WARNING (not in transaction)
+		if results[3].Severity != SeverityWarning {
+			t.Errorf("VACUUM after COMMIT should be WARNING, got %v", results[3].Severity)
+		}
+	})
+
+	t.Run("InTransaction mode starts at depth 1", func(t *testing.T) {
+		a := New()
+		sql := "CREATE INDEX CONCURRENTLY idx ON users(id);"
+		parsed, err := p.ParseSQL(sql)
+		if err != nil {
+			t.Fatalf("Parse error: %v", err)
+		}
+
+		results, err := a.Analyze(parsed, InTransaction)
+		if err != nil {
+			t.Fatalf("Analyze error: %v", err)
+		}
+
+		// In InTransaction mode, CREATE INDEX CONCURRENTLY should be ERROR
+		if results[0].Severity != SeverityError {
+			t.Errorf("CREATE INDEX CONCURRENTLY in InTransaction mode should be ERROR, got %v", results[0].Severity)
+		}
+	})
+}
+
+func TestFormatTableLock(t *testing.T) {
+	result := formatTableLock("users", RowExclusive)
+	expected := "users: RowExclusive"
+	if result != expected {
+		t.Errorf("formatTableLock = %q, want %q", result, expected)
+	}
+}
+
+func TestUpdateTransactionDepth(t *testing.T) {
 	tests := []struct {
-		name             string
-		sql              string
-		mode             TransactionMode
-		expectedSeverity Severity
+		name          string
+		initialDepth  int
+		operation     string
+		expectedDepth int
 	}{
-		{
-			name:             "Future SQL command",
-			sql:              "FUTURE_COMMAND table_name", // Hypothetical future command
-			mode:             InTransaction,
-			expectedSeverity: SeverityInfo, // Should default to INFO for unknown
-		},
+		{"BEGIN from zero", 0, "BEGIN", 1},
+		{"BEGIN from non-zero (no nesting)", 1, "BEGIN", 1},
+		{"START TRANSACTION from zero", 0, "START TRANSACTION", 1},
+		{"COMMIT from one", 1, "COMMIT", 0},
+		{"COMMIT from zero (no underflow)", 0, "COMMIT", 0},
+		{"ROLLBACK from one", 1, "ROLLBACK", 0},
+		{"ROLLBACK from zero", 0, "ROLLBACK", 0},
+		{"ROLLBACK TO SAVEPOINT (stays same)", 1, "ROLLBACK TO SAVEPOINT", 1},
+		{"Other operation (stays same)", 1, "SELECT", 1},
 	}
 
-	// Note: These tests will fail parsing, but we include them to ensure
-	// the analyzer would handle unknown AST nodes gracefully if they existed
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// This will fail at parse stage, which is expected
-			// The test documents our intention to handle unknown operations
-			t.Skip("Unknown operations fail at parse stage - documenting intended behavior")
+			a := &analyzer{
+				registry:         newOperationRegistry(),
+				transactionDepth: tt.initialDepth,
+			}
+			a.updateTransactionDepth(tt.operation)
+			if a.transactionDepth != tt.expectedDepth {
+				t.Errorf("transactionDepth = %d, want %d", a.transactionDepth, tt.expectedDepth)
+			}
 		})
 	}
 }

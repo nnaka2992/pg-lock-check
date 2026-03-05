@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -53,9 +56,9 @@ func TestSuggestionOutput(t *testing.T) {
 					sql:        "INSERT INTO users (name) VALUES ('test');",
 					severity:   "INFO",
 					operation:  "INSERT",
-					lockType:   "RowExclusiveLock",
+					lockType:   "RowExclusive",
 					tables: []SuggestionExpectedTable{
-						{name: "users", lockType: "RowExclusiveLock"},
+						{name: "users", lockType: "RowExclusive"},
 					},
 					suggestion: &ExpectedSuggestion{}, // no sugestion
 				},
@@ -72,9 +75,9 @@ func TestSuggestionOutput(t *testing.T) {
 					sql:        "UPDATE users SET active = false;",
 					severity:   "CRITICAL",
 					operation:  "UPDATE without WHERE",
-					lockType:   "RowExclusiveLock",
+					lockType:   "RowExclusive",
 					tables: []SuggestionExpectedTable{
-						{name: "users", lockType: "RowExclusiveLock"},
+						{name: "users", lockType: "RowExclusive"},
 					},
 					suggestion: &ExpectedSuggestion{
 						steps: []ExpectedStep{
@@ -104,9 +107,9 @@ func TestSuggestionOutput(t *testing.T) {
 					sql:        "DELETE FROM sessions;",
 					severity:   "CRITICAL",
 					operation:  "DELETE without WHERE",
-					lockType:   "RowExclusiveLock",
+					lockType:   "RowExclusive",
 					tables: []SuggestionExpectedTable{
-						{name: "sessions", lockType: "RowExclusiveLock"},
+						{name: "sessions", lockType: "RowExclusive"},
 					},
 					suggestion: &ExpectedSuggestion{
 						steps: []ExpectedStep{
@@ -136,10 +139,10 @@ func TestSuggestionOutput(t *testing.T) {
 					sql:        "MERGE INTO users USING new_users ON users.id = new_users.id WHEN MATCHED THEN UPDATE SET email = new_users.email WHEN NOT MATCHED THEN INSERT (id, name, email, created_at, updated_at) VALUES (new_users.id, new_users.name, new_users.email, new_users.created_at, new_users.updated_at);",
 					severity:   "CRITICAL",
 					operation:  "MERGE without WHERE",
-					lockType:   "RowExclusiveLock",
+					lockType:   "RowExclusive",
 					tables: []SuggestionExpectedTable{
-						{name: "users", lockType: "RowExclusiveLock"},
-						{name: "new_users", lockType: "AccessShareLock"},
+						{name: "users", lockType: "RowExclusive"},
+						{name: "new_users", lockType: "AccessShare"},
 					},
 					suggestion: &ExpectedSuggestion{
 						steps: []ExpectedStep{
@@ -169,9 +172,9 @@ func TestSuggestionOutput(t *testing.T) {
 					sql:        "DROP INDEX idx_users_email;",
 					severity:   "CRITICAL",
 					operation:  "DROP INDEX",
-					lockType:   "AccessExclusiveLock",
+					lockType:   "AccessExclusive",
 					tables: []SuggestionExpectedTable{
-						{name: "idx_users_email", lockType: "AccessExclusiveLock"},
+						{name: "idx_users_email", lockType: "AccessExclusive"},
 					},
 					suggestion: &ExpectedSuggestion{
 						steps: []ExpectedStep{
@@ -196,9 +199,9 @@ func TestSuggestionOutput(t *testing.T) {
 					sql:        "CREATE INDEX idx_users_email ON users(email);",
 					severity:   "CRITICAL",
 					operation:  "CREATE INDEX",
-					lockType:   "ShareLock",
+					lockType:   "Share",
 					tables: []SuggestionExpectedTable{
-						{name: "users", lockType: "ShareLock"},
+						{name: "users", lockType: "Share"},
 					},
 					suggestion: &ExpectedSuggestion{
 						steps: []ExpectedStep{
@@ -223,9 +226,9 @@ func TestSuggestionOutput(t *testing.T) {
 					sql:        "CREATE UNIQUE INDEX uniq_users_username ON users(username);",
 					severity:   "CRITICAL",
 					operation:  "CREATE UNIQUE INDEX",
-					lockType:   "ShareLock",
+					lockType:   "Share",
 					tables: []SuggestionExpectedTable{
-						{name: "users", lockType: "ShareLock"},
+						{name: "users", lockType: "Share"},
 					},
 					suggestion: &ExpectedSuggestion{
 						steps: []ExpectedStep{
@@ -249,10 +252,10 @@ func TestSuggestionOutput(t *testing.T) {
 					lineNumber: 1,
 					sql:        "REINDEX INDEX idx_users_email;",
 					severity:   "CRITICAL",
-					operation:  "REINDEX INDEX",
-					lockType:   "AccessExclusiveLock",
+					operation:  "REINDEX",
+					lockType:   "AccessExclusive",
 					tables: []SuggestionExpectedTable{
-						{name: "idx_users_email", lockType: "AccessExclusiveLock"},
+						{name: "idx_users_email", lockType: "AccessExclusive"},
 					},
 					suggestion: &ExpectedSuggestion{
 						steps: []ExpectedStep{
@@ -277,9 +280,9 @@ func TestSuggestionOutput(t *testing.T) {
 					sql:        "REINDEX TABLE users;",
 					severity:   "CRITICAL",
 					operation:  "REINDEX TABLE",
-					lockType:   "ShareLock",
+					lockType:   "AccessExclusive",
 					tables: []SuggestionExpectedTable{
-						{name: "users", lockType: "ShareLock"},
+						{name: "users", lockType: "AccessExclusive"},
 					},
 					suggestion: &ExpectedSuggestion{
 						steps: []ExpectedStep{
@@ -309,9 +312,9 @@ func TestSuggestionOutput(t *testing.T) {
 					sql:        "REINDEX DATABASE mydb;",
 					severity:   "CRITICAL",
 					operation:  "REINDEX DATABASE",
-					lockType:   "ShareLock",
+					lockType:   "AccessExclusive",
 					tables: []SuggestionExpectedTable{
-						{name: "mydb", lockType: "ShareLock"},
+						{name: "mydb", lockType: "AccessExclusive"},
 					},
 					suggestion: &ExpectedSuggestion{
 						steps: []ExpectedStep{
@@ -341,9 +344,9 @@ func TestSuggestionOutput(t *testing.T) {
 					sql:        "REINDEX SCHEMA public;",
 					severity:   "CRITICAL",
 					operation:  "REINDEX SCHEMA",
-					lockType:   "ShareLock",
+					lockType:   "AccessExclusive",
 					tables: []SuggestionExpectedTable{
-						{name: "public", lockType: "ShareLock"},
+						{name: "public", lockType: "AccessExclusive"},
 					},
 					suggestion: &ExpectedSuggestion{
 						steps: []ExpectedStep{
@@ -373,9 +376,9 @@ func TestSuggestionOutput(t *testing.T) {
 					sql:        "ALTER TABLE users ADD COLUMN new_id uuid DEFAULT gen_random_uuid();",
 					severity:   "CRITICAL",
 					operation:  "ALTER TABLE ADD COLUMN with volatile DEFAULT",
-					lockType:   "AccessExclusiveLock",
+					lockType:   "AccessExclusive",
 					tables: []SuggestionExpectedTable{
-						{name: "users", lockType: "AccessExclusiveLock"},
+						{name: "users", lockType: "AccessExclusive"},
 					},
 					suggestion: &ExpectedSuggestion{
 						steps: []ExpectedStep{
@@ -410,9 +413,9 @@ func TestSuggestionOutput(t *testing.T) {
 					sql:        "ALTER TABLE users ALTER COLUMN email TYPE VARCHAR(255);",
 					severity:   "CRITICAL",
 					operation:  "ALTER TABLE ALTER COLUMN TYPE",
-					lockType:   "AccessExclusiveLock",
+					lockType:   "AccessExclusive",
 					tables: []SuggestionExpectedTable{
-						{name: "users", lockType: "AccessExclusiveLock"},
+						{name: "users", lockType: "AccessExclusive"},
 					},
 					suggestion: &ExpectedSuggestion{
 						steps: []ExpectedStep{
@@ -452,9 +455,9 @@ func TestSuggestionOutput(t *testing.T) {
 					sql:        "ALTER TABLE users ADD PRIMARY KEY (id);",
 					severity:   "CRITICAL",
 					operation:  "ALTER TABLE ADD PRIMARY KEY",
-					lockType:   "AccessExclusiveLock",
+					lockType:   "AccessExclusive",
 					tables: []SuggestionExpectedTable{
-						{name: "users", lockType: "AccessExclusiveLock"},
+						{name: "users", lockType: "AccessExclusive"},
 					},
 					suggestion: &ExpectedSuggestion{
 						steps: []ExpectedStep{
@@ -484,9 +487,9 @@ func TestSuggestionOutput(t *testing.T) {
 					sql:        "ALTER TABLE users ADD CONSTRAINT check_age CHECK (age >= 18);",
 					severity:   "CRITICAL",
 					operation:  "ALTER TABLE ADD CONSTRAINT CHECK",
-					lockType:   "AccessExclusiveLock",
+					lockType:   "AccessExclusive",
 					tables: []SuggestionExpectedTable{
-						{name: "users", lockType: "AccessExclusiveLock"},
+						{name: "users", lockType: "AccessExclusive"},
 					},
 					suggestion: &ExpectedSuggestion{
 						steps: []ExpectedStep{
@@ -515,10 +518,10 @@ func TestSuggestionOutput(t *testing.T) {
 					lineNumber: 1,
 					sql:        "ALTER TABLE users ALTER COLUMN email SET NOT NULL;",
 					severity:   "CRITICAL",
-					operation:  "ALTER TABLE ALTER COLUMN SET NOT NULL",
-					lockType:   "AccessExclusiveLock",
+					operation:  "ALTER TABLE SET NOT NULL",
+					lockType:   "AccessExclusive",
 					tables: []SuggestionExpectedTable{
-						{name: "users", lockType: "AccessExclusiveLock"},
+						{name: "users", lockType: "AccessExclusive"},
 					},
 					suggestion: &ExpectedSuggestion{
 						steps: []ExpectedStep{
@@ -558,9 +561,9 @@ func TestSuggestionOutput(t *testing.T) {
 					sql:        "CLUSTER users USING idx_users_id;",
 					severity:   "CRITICAL",
 					operation:  "CLUSTER",
-					lockType:   "AccessExclusiveLock",
+					lockType:   "AccessExclusive",
 					tables: []SuggestionExpectedTable{
-						{name: "users", lockType: "AccessExclusiveLock"},
+						{name: "users", lockType: "AccessExclusive"},
 					},
 					suggestion: &ExpectedSuggestion{
 						steps: []ExpectedStep{
@@ -585,9 +588,9 @@ func TestSuggestionOutput(t *testing.T) {
 					sql:        "REFRESH MATERIALIZED VIEW user_stats;",
 					severity:   "CRITICAL",
 					operation:  "REFRESH MATERIALIZED VIEW",
-					lockType:   "AccessExclusiveLock",
+					lockType:   "AccessExclusive",
 					tables: []SuggestionExpectedTable{
-						{name: "user_stats", lockType: "AccessExclusiveLock"},
+						{name: "user_stats", lockType: "AccessExclusive"},
 					},
 					suggestion: &ExpectedSuggestion{
 						steps: []ExpectedStep{
@@ -612,9 +615,9 @@ func TestSuggestionOutput(t *testing.T) {
 					sql:        "VACUUM FULL users;",
 					severity:   "CRITICAL",
 					operation:  "VACUUM FULL",
-					lockType:   "AccessExclusiveLock",
+					lockType:   "AccessExclusive",
 					tables: []SuggestionExpectedTable{
-						{name: "users", lockType: "AccessExclusiveLock"},
+						{name: "users", lockType: "AccessExclusive"},
 					},
 					suggestion: &ExpectedSuggestion{
 						steps: []ExpectedStep{
@@ -632,8 +635,128 @@ func TestSuggestionOutput(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// TODO: Implement test
-			t.Skip("Not implemented yet")
+			// Run with JSON output to get structured data
+			args := []string{"-o", "json"}
+			output, exitCode := runCommand(t, args, tt.sql)
+			if exitCode != 0 {
+				t.Fatalf("Command failed with exit code %d: %s", exitCode, output)
+			}
+
+			// Parse JSON output
+			var result map[string]interface{}
+			if err := json.Unmarshal([]byte(output), &result); err != nil {
+				t.Fatalf("Output is not valid JSON: %v\nOutput: %s", err, output)
+			}
+
+			// Verify summary
+			summary := result["summary"].(map[string]interface{})
+			totalStatements := int(summary["total_statements"].(float64))
+			if totalStatements != tt.expectTotalStatements {
+				t.Errorf("Expected %d statements, got %d", tt.expectTotalStatements, totalStatements)
+			}
+
+			// Verify results
+			results := result["results"].([]interface{})
+			if len(results) != len(tt.expectResults) {
+				t.Fatalf("Expected %d results, got %d", len(tt.expectResults), len(results))
+			}
+
+			for i, expected := range tt.expectResults {
+				r := results[i].(map[string]interface{})
+
+				// Check basic fields
+				if idx := int(r["index"].(float64)); idx != expected.index {
+					t.Errorf("Result %d: expected index %d, got %d", i, expected.index, idx)
+				}
+				if lineNum := int(r["line_number"].(float64)); lineNum != expected.lineNumber {
+					t.Errorf("Result %d: expected line_number %d, got %d", i, expected.lineNumber, lineNum)
+				}
+				if sql := r["sql"].(string); sql != expected.sql {
+					t.Errorf("Result %d: expected sql %q, got %q", i, expected.sql, sql)
+				}
+				if severity := r["severity"].(string); severity != expected.severity {
+					t.Errorf("Result %d: expected severity %s, got %s", i, expected.severity, severity)
+				}
+				if operation := r["operation"].(string); operation != expected.operation {
+					t.Errorf("Result %d: expected operation %s, got %s", i, expected.operation, operation)
+				}
+				if lockType := r["lock_type"].(string); lockType != expected.lockType {
+					t.Errorf("Result %d: expected lock_type %s, got %s", i, expected.lockType, lockType)
+				}
+
+				// Check tables
+				tables := r["tables"].([]interface{})
+				if len(tables) != len(expected.tables) {
+					t.Errorf("Result %d: expected %d tables, got %d", i, len(expected.tables), len(tables))
+				} else {
+					// Sort tables by name for consistent comparison
+					sort.Slice(tables, func(a, b int) bool {
+						return tables[a].(map[string]interface{})["name"].(string) <
+							tables[b].(map[string]interface{})["name"].(string)
+					})
+					sortedExpected := make([]SuggestionExpectedTable, len(expected.tables))
+					copy(sortedExpected, expected.tables)
+					sort.Slice(sortedExpected, func(a, b int) bool {
+						return sortedExpected[a].name < sortedExpected[b].name
+					})
+
+					for j, expectedTable := range sortedExpected {
+						table := tables[j].(map[string]interface{})
+						if name := table["name"].(string); name != expectedTable.name {
+							t.Errorf("Result %d, table %d: expected name %s, got %s", i, j, expectedTable.name, name)
+						}
+						if lockType := table["lock_type"].(string); lockType != expectedTable.lockType {
+							t.Errorf("Result %d, table %d: expected lock_type %s, got %s", i, j, expectedTable.lockType, lockType)
+						}
+					}
+				}
+
+				// Check suggestion
+				if expected.suggestion != nil && len(expected.suggestion.steps) > 0 {
+					suggestionRaw, hasSuggestion := r["suggestion"]
+					if !hasSuggestion || suggestionRaw == nil {
+						t.Errorf("Result %d: expected suggestion but got none", i)
+						continue
+					}
+					suggestion := suggestionRaw.(map[string]interface{})
+					steps := suggestion["steps"].([]interface{})
+					if len(steps) != len(expected.suggestion.steps) {
+						t.Errorf("Result %d: expected %d suggestion steps, got %d", i, len(expected.suggestion.steps), len(steps))
+						continue
+					}
+
+					for j, expectedStep := range expected.suggestion.steps {
+						step := steps[j].(map[string]interface{})
+
+						if desc := step["description"].(string); desc != expectedStep.description {
+							t.Errorf("Result %d, step %d: expected description %q, got %q", i, j, expectedStep.description, desc)
+						}
+						if canRun := step["can_run_in_transaction"].(bool); canRun != expectedStep.canRunInTransaction {
+							t.Errorf("Result %d, step %d: expected can_run_in_transaction %v, got %v", i, j, expectedStep.canRunInTransaction, canRun)
+						}
+
+						// Check output - supports "contains:" prefix for substring matching
+						if expectedStep.output != "" {
+							stepOutput := step["output"].(string)
+							if strings.HasPrefix(expectedStep.output, "contains:") {
+								substr := strings.TrimPrefix(expectedStep.output, "contains:")
+								if !strings.Contains(stepOutput, substr) {
+									t.Errorf("Result %d, step %d: output should contain %q, got %q", i, j, substr, stepOutput)
+								}
+							} else {
+								if stepOutput != expectedStep.output {
+									t.Errorf("Result %d, step %d: expected output %q, got %q", i, j, expectedStep.output, stepOutput)
+								}
+							}
+						}
+					}
+				} else if expected.suggestion != nil && len(expected.suggestion.steps) == 0 {
+					// Expected no suggestion (empty steps means no suggestion expected)
+					if suggestionRaw, hasSuggestion := r["suggestion"]; hasSuggestion && suggestionRaw != nil {
+						t.Errorf("Result %d: expected no suggestion but got one", i)
+					}
+				}
+			}
 		})
 	}
 }

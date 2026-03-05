@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	pathutil "path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -519,6 +520,119 @@ COMMIT;`,
 				if stmt.LineNumber != tt.expectedLines[i] {
 					t.Errorf("statement %d: expected line %d, got %d", i, tt.expectedLines[i], stmt.LineNumber)
 				}
+			}
+		})
+	}
+}
+
+func TestParseSQLEdgeCases(t *testing.T) {
+	p := NewParser()
+
+	t.Run("whitespace only", func(t *testing.T) {
+		result, err := p.ParseSQL("   \n\t\n   ")
+		if err != nil {
+			t.Fatalf("Unexpected error for whitespace-only SQL: %v", err)
+		}
+		if len(result.Statements) != 0 {
+			t.Errorf("Expected 0 statements for whitespace-only SQL, got %d", len(result.Statements))
+		}
+	})
+
+	t.Run("multiple semicolons only", func(t *testing.T) {
+		result, err := p.ParseSQL(";;;")
+		if err != nil {
+			t.Fatalf("Unexpected error for semicolons-only SQL: %v", err)
+		}
+		if len(result.Statements) != 0 {
+			t.Errorf("Expected 0 statements for semicolons-only SQL, got %d", len(result.Statements))
+		}
+	})
+
+	t.Run("BOM in string input", func(t *testing.T) {
+		result, err := p.ParseSQL("\xEF\xBB\xBFSELECT 1;")
+		if err != nil {
+			t.Fatalf("Unexpected error for BOM SQL: %v", err)
+		}
+		if len(result.Statements) != 1 {
+			t.Fatalf("Expected 1 statement, got %d", len(result.Statements))
+		}
+		if result.Statements[0].SQL != "SELECT 1" {
+			t.Errorf("Expected BOM to be stripped, got SQL %q", result.Statements[0].SQL)
+		}
+	})
+
+	t.Run("very long single statement", func(t *testing.T) {
+		var columns []string
+		for i := 0; i < 100; i++ {
+			columns = append(columns, fmt.Sprintf("col_%d", i))
+		}
+		sql := "SELECT " + strings.Join(columns, ", ") + " FROM t;"
+		result, err := p.ParseSQL(sql)
+		if err != nil {
+			t.Fatalf("Unexpected error for long SQL: %v", err)
+		}
+		if len(result.Statements) != 1 {
+			t.Errorf("Expected 1 statement, got %d", len(result.Statements))
+		}
+	})
+}
+
+func TestStripBOM(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []byte
+		expected []byte
+	}{
+		{
+			name:     "with BOM",
+			input:    []byte{0xEF, 0xBB, 0xBF, 'S', 'E', 'L'},
+			expected: []byte{'S', 'E', 'L'},
+		},
+		{
+			name:     "without BOM",
+			input:    []byte("SELECT 1"),
+			expected: []byte("SELECT 1"),
+		},
+		{
+			name:     "empty input",
+			input:    []byte{},
+			expected: []byte{},
+		},
+		{
+			name:     "partial BOM (too short)",
+			input:    []byte{0xEF, 0xBB},
+			expected: []byte{0xEF, 0xBB},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := stripBOM(tt.input)
+			if string(result) != string(tt.expected) {
+				t.Errorf("stripBOM() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCalculateLineNumber(t *testing.T) {
+	tests := []struct {
+		name     string
+		sql      string
+		position int
+		expected int
+	}{
+		{"position 0", "SELECT 1", 0, 1},
+		{"first line", "SELECT 1\nSELECT 2", 5, 1},
+		{"second line", "SELECT 1\nSELECT 2", 9, 2},
+		{"third line", "A\nB\nC", 4, 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := calculateLineNumber(tt.sql, tt.position)
+			if result != tt.expected {
+				t.Errorf("calculateLineNumber(%q, %d) = %d, want %d", tt.sql, tt.position, result, tt.expected)
 			}
 		})
 	}

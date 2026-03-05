@@ -209,6 +209,60 @@ func TestExtractMetadata(t *testing.T) {
 	}
 }
 
+func TestExtractMetadataEdgeCases(t *testing.T) {
+	t.Run("nil AST node", func(t *testing.T) {
+		extractor := NewExtractor()
+		metadata := extractor.Extract(nil, "UPDATE without WHERE")
+		// Should not panic and return empty metadata
+		if metadata == nil {
+			t.Error("Expected non-nil metadata map for nil AST")
+		}
+	})
+
+	t.Run("unknown operation", func(t *testing.T) {
+		p := parser.NewParser()
+		parseResult, err := p.ParseSQL("SELECT 1;")
+		if err != nil {
+			t.Fatalf("Failed to parse: %v", err)
+		}
+		extractor := NewExtractor()
+		metadata := extractor.Extract(parseResult.Statements[0].AST.Stmts[0].Stmt, "UNKNOWN_OPERATION")
+		if len(metadata) != 0 {
+			t.Errorf("Expected empty metadata for unknown operation, got %v", metadata)
+		}
+	})
+
+	t.Run("REINDEX DATABASE metadata", func(t *testing.T) {
+		p := parser.NewParser()
+		parseResult, err := p.ParseSQL("REINDEX DATABASE mydb;")
+		if err != nil {
+			t.Fatalf("Failed to parse: %v", err)
+		}
+		extractor := NewExtractor()
+		metadata := extractor.Extract(parseResult.Statements[0].AST.Stmts[0].Stmt, "REINDEX DATABASE")
+		if dbName, ok := metadata["databaseName"]; !ok || toString(dbName) != "mydb" {
+			t.Errorf("Expected databaseName=mydb, got %v", metadata)
+		}
+	})
+
+	t.Run("MERGE without WHERE metadata", func(t *testing.T) {
+		p := parser.NewParser()
+		sql := "MERGE INTO users USING new_users ON users.id = new_users.id WHEN MATCHED THEN UPDATE SET name = new_users.name WHEN NOT MATCHED THEN INSERT (id, name) VALUES (new_users.id, new_users.name);"
+		parseResult, err := p.ParseSQL(sql)
+		if err != nil {
+			t.Fatalf("Failed to parse: %v", err)
+		}
+		extractor := NewExtractor()
+		metadata := extractor.Extract(parseResult.Statements[0].AST.Stmts[0].Stmt, "MERGE without WHERE")
+		if tableName, ok := metadata["tableName"]; !ok || toString(tableName) != "users" {
+			t.Errorf("Expected tableName=users, got %v", metadata["tableName"])
+		}
+		if sourceName, ok := metadata["sourceTable"]; !ok || toString(sourceName) != "new_users" {
+			t.Errorf("Expected sourceTable=new_users, got %v", metadata["sourceTable"])
+		}
+	})
+}
+
 // Helper function to convert values to strings for comparison
 func toString(v interface{}) string {
 	switch val := v.(type) {
